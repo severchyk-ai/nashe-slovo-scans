@@ -3,9 +3,10 @@
 
 # ---------------------------------------------------------------- налаштування
 # Переїзд на інший том = зміна цих трьох рядків і більше нічого.
-$script:NS_MASTERS = "C:\NS_MASTERS"
-$script:NS_WORK    = "C:\NS_WORK"
-$script:NS_PDF     = "C:\NS_PDF"
+# NS_TEST_* — лише для випробувань на піску (клон-каталог у C:\NS_WORK\_sandbox); у роботі не задаються.
+$script:NS_MASTERS = if ($env:NS_TEST_MASTERS) { $env:NS_TEST_MASTERS } else { "C:\NS_MASTERS" }
+$script:NS_WORK    = if ($env:NS_TEST_WORK)    { $env:NS_TEST_WORK }    else { "C:\NS_WORK" }
+$script:NS_PDF     = if ($env:NS_TEST_PDF)     { $env:NS_TEST_PDF }     else { "C:\NS_PDF" }
 
 $script:CATALOG    = Join-Path $NS_MASTERS "_catalog"
 $script:REGISTRY   = Join-Path $CATALOG "issues.csv"

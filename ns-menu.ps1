@@ -195,6 +195,9 @@ try {
             Write-Host ("  [{0}]  Зібрати PDF                     (готових номерів немає)" -f $n) -ForegroundColor DarkGray
         }
 
+        $n++; $actions["$n"] = @{ kind = "endday" }
+        Write-Host ("  [{0}]  Завершити день   (зберегти роботу: git + резерв на диск)" -f $n) -ForegroundColor Cyan
+
         Write-Host "  [Q]  Вихід"
         Write-Host "  $line" -ForegroundColor DarkGray
         Write-Host ""
@@ -210,6 +213,7 @@ try {
             "new"    { Invoke-NsNewIssue -Suggestion $sugg }
             "verify" { & "$PSScriptRoot\ns-verify.ps1" }
             "open"   { Start-Process explorer.exe $script:NS_MASTERS }
+            "endday" { & "$PSScriptRoot\ns-endday.ps1" }
             "pdf"    {
                 if ($a.ready.Count -gt 0) {
                     Write-Host ("  Готові до збірки: {0}" -f (($a.ready | ForEach-Object { $_.seq_first }) -join ', '))
