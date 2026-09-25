@@ -25,6 +25,8 @@
 """
 import argparse
 import glob
+import json
+import math
 import os
 import re
 import sys
@@ -142,6 +144,9 @@ def main():
     ap.add_argument("--side", default="")
     ap.add_argument("--rotate", default="")     # page_rotate з маніфеста: "6:270,7:90"
     ap.add_argument("--csv", default="")
+    ap.add_argument("--suggest", action="store_true")     # показати запропонований page_edge корінця
+    ap.add_argument("--jsonout", default="")               # зберегти замір і пропозицію в JSON
+    ap.add_argument("--margin", type=float, default=0.5)   # запас над найдальшою ниткою, мм
     a = ap.parse_args()
     files = {}
     for f in glob.glob(os.path.join(a.dir, "*p[0-9][0-9].tif")):
@@ -188,12 +193,56 @@ def main():
         print("Зріз, мм -> ниток лишається (від %d):" % allf.size)
         print("   " + "  ".join("%dмм:%d" % (c, int((allf > c).sum())) for c in range(1, 9)))
     print("великих дірок: %d" % len(all_big))
+    if a.suggest or a.jsonout:
+        suggest(a, rows)
     if args_csv(a) and rows:
         with open(a.csv, "w", encoding="utf-8-sig") as fh:
             fh.write("page;side;along_mm;w_mm;h_mm;near_mm;far_mm\n")
             for p, side, r in rows:
                 for t in r["threads"]:
                     fh.write("%d;%s;%.1f;%.1f;%.1f;%.1f;%.1f\n" % ((p, side) + t))
+
+
+def suggest(a, rows):
+    """Пропозиція page_edge для корінцевих сторін: найдальша нитка сторінки + запас, до кроку 0,5 мм.
+    Верхня межа — початок друку мінус 1,5 мм (тоді позначка Review: різати глибше без
+    друку не можна, вирішує оператор). Сторінка без ниток — медіана решти сторінок номера
+    (теж позначка). Це ПРОПОЗИЦІЯ: у маніфест її пише ns-prepare / ns-prep -EdgeExtra."""
+    out, cuts = [], []
+    for p, side, r in rows:
+        fars = [t[4] for t in r["threads"]]
+        ps = r["print_start"]
+        item = {"n": p, "side": side, "threads": len(fars), "far_max": round(max(fars), 1) if fars else None,
+                "bigs": len(r["bigs"]), "print_start": None if ps is None else round(ps, 1), "flags": []}
+        if fars:
+            cut = math.ceil((max(fars) + a.margin) / 0.5) * 0.5
+            if ps is not None and cut > ps - 1.5:
+                cap = math.floor((ps - 1.5) / 0.5) * 0.5
+                item["flags"].append("Review: нитки до %.1f мм, друк з %.1f мм — зріз обмежено %.1f" % (max(fars), ps, cap))
+                cut = cap
+            item["cut"] = cut
+            cuts.append(cut)
+        else:
+            item["cut"] = None
+            item["flags"].append("нитки не знайдено")
+        if len(r["bigs"]) != 2:
+            item["flags"].append("великих дірок %d (очікувалось 2)" % len(r["bigs"]))
+        out.append(item)
+    med = sorted(cuts)[len(cuts) // 2] if cuts else None
+    for it in out:
+        if it["cut"] is None and med is not None:
+            it["cut"] = med
+            it["flags"].append("Review: зріз узято з медіани номера %.1f" % med)
+    tokens = ["%d%s%s" % (it["n"], it["side"], ("%g" % it["cut"])) for it in out if it["cut"] is not None]
+    edge = " ".join(tokens)
+    print()
+    print("ПРОПОЗИЦІЯ page_edge (корінець): " + edge)
+    for it in out:
+        if it["flags"]:
+            print("   стор. %d: %s" % (it["n"], "; ".join(it["flags"])))
+    if a.jsonout:
+        with open(a.jsonout, "w", encoding="utf-8") as fh:
+            json.dump({"edge": edge, "pages": out}, fh, ensure_ascii=False, indent=1)
 
 
 def args_csv(a):
