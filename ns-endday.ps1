@@ -146,7 +146,7 @@ if ($NoBackup) {
     }
     $parts = @(); $fulls = @()
     foreach ($r in $roots) {
-        $d = @{ Root = $r; Scope = $null; Years = @(); Jobs = @(); Result = "" }
+        $d = @{ Root = $r; Scope = $null; Years = @(); MYears = @(); YbJ = @{}; Jobs = @(); Result = "" }
         $scopeFile = Join-Path $r "NS_BACKUP\_scope.json"
         Write-Host ""
         Write-Host ("     Диск {0}  (вільно {1:N1} ГБ)" -f $r, ((Get-PSDrive $r.Substring(0, 1)).Free / 1GB)) -ForegroundColor White
@@ -162,9 +162,17 @@ if ($NoBackup) {
             $d.Result = "_scope.json зіпсований"; $parts += "$r ЗБІЙ: $($d.Result)"; $disks += $d; continue
         }
         $d.Years = @($d.Scope.years | ForEach-Object { [int]$_ }); $d.Jobs = @($d.Scope.jobs)
-        Write-Host ("       Береже: роки {0}; частини {1}" -f $(if ($d.Years.Count) { $d.Years -join ", " } else { "усі" }), ($d.Jobs -join ", "))
+        # роки окремих частин (years_by_job): напр. майстри 2002, а PDF 2001 і 2002; без запису діють загальні years
+        $d.YbJ = @{}
+        if ($d.Scope.PSObject.Properties.Name -contains 'years_by_job' -and $d.Scope.years_by_job) {
+            foreach ($pr in $d.Scope.years_by_job.PSObject.Properties) { $d.YbJ[$pr.Name] = @($pr.Value | ForEach-Object { [int]$_ }) }
+        }
+        $d.MYears = if ($d.YbJ.ContainsKey("masters")) { @($d.YbJ["masters"]) } else { $d.Years }
+        $jyText = ($d.YbJ.Keys | ForEach-Object { "{0}: {1}" -f $_, ($d.YbJ[$_] -join ",") }) -join "; "
+        Write-Host ("       Береже: роки {0}{1}; частини {2}" -f $(if ($d.Years.Count) { $d.Years -join ", " } else { "усі" }), $(if ($jyText) { " (окремо: $jyText)" } else { "" }), ($d.Jobs -join ", "))
         $bp = @{ Dest = $r; Quick = $true; Jobs = ($d.Jobs -join ",") }
         if ($d.Years.Count) { $bp.Years = ($d.Years -join ",") }
+        if ($d.YbJ.Count) { $bp.JobYears = (($d.YbJ.Keys | ForEach-Object { "{0}={1}" -f $_, ($d.YbJ[$_] -join ",") }) -join ";") }
         if ($DryRun) {
             $bp.DryRun = $true; $bp.Remove("Quick")
             $rc = Invoke-NsScript -Path (Join-Path $PSScriptRoot "ns-backup.ps1") -Params $bp
@@ -181,7 +189,7 @@ if ($NoBackup) {
                 Write-Host ""
                 Write-Host "       Повна звірка копії за SHA-256 (раз на 7 днів; кілька хвилин)…" -ForegroundColor Cyan
                 $vp = @{ Dest = $r; VerifyOnly = $true; Jobs = "masters" }
-                if ($d.Years.Count) { $vp.Years = ($d.Years -join ",") }
+                if ($d.MYears.Count) { $vp.Years = ($d.MYears -join ",") }
                 $rf = Invoke-NsScript -Path (Join-Path $PSScriptRoot "ns-backup.ps1") -Params $vp
                 if ($rf -eq 0) { $fulls += "повна звірка [$r]: ok" }
                 else { $fulls += "повна звірка [$r]: НЕ пройшла (код $rf)"; $d.Result = "$($d.Result); повна звірка НЕ пройшла"; Write-Host "       Повна звірка НЕ пройшла!" -ForegroundColor Red }
@@ -219,7 +227,7 @@ if ($NoBackup) {
                 $byYear[$y].total++
                 foreach ($d in $activeDisks) {
                     if ($d.Jobs -notcontains "masters") { continue }
-                    if ($d.Years.Count -and ($d.Years -notcontains $y)) { continue }
+                    if ($d.MYears.Count -and ($d.MYears -notcontains $y)) { continue }
                     $cf = Join-Path $d.Root ("NS_BACKUP\NS_MASTERS\{0}\{1}\{2}" -f $y, $idir.Name, $p.file)
                     if ((Test-Path -LiteralPath $cf) -and ((Get-Item -LiteralPath $cf).Length -eq [long]$p.bytes)) { $byYear[$y].copied++; break }
                 }

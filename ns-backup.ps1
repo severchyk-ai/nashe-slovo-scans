@@ -4,6 +4,7 @@
 #   .\ns-backup.ps1 -Dest F:\ -Years 2002            лише майстри (і PDF) 2002 року + весь _catalog
 #   .\ns-backup.ps1 -Dest F:\ -Years 2002 -Jobs masters,pdf    лише названі частини
 #   .\ns-backup.ps1 -Dest D:\ -Years 2000,2001 -VerifyOnly     лише звірити наявну копію цих років (нічого не пише)
+#   .\ns-backup.ps1 -Dest F:\ -Years 2002 -Jobs masters,pdf -JobYears "pdf=2001,2002"   PDF інших років, ніж майстри
 #   .\ns-backup.ps1 -Dest D:\ -Quick                 звіряти за SHA-256 лише сторінки, яких ще не звіряли
 #                                                    (список звіреного: <Dest>\NS_BACKUP\_verified.txt; «Завершити день»)
 #   .\ns-backup.ps1 -Dest D:\ -DryRun                лише порахувати, що влізе (нічого не пише й не звіряє)
@@ -39,13 +40,22 @@
 
 param([Parameter(Mandatory = $true)][string]$Dest,
       [switch]$VerifyOnly, [switch]$Quick, [switch]$DryRun,
-      [string]$Years = "", [string]$Jobs = "all")
+      [string]$Years = "", [string]$Jobs = "all", [string]$JobYears = "")
 
 . "$PSScriptRoot\ns-lib.ps1"
 Initialize-NsConsole
 
 $root = Join-Path $Dest "NS_BACKUP"
 $yearList = @($Years -split '[,\s]+' | Where-Object { $_ -match '^\d{4}$' })
+# -JobYears "pdf=2001,2002;masters=2002": роки для окремої частини замість загальних -Years (диск може берегти майстри одних років, а PDF інших)
+$jobYearMap = @{}
+foreach ($pair in @($JobYears -split ';' | Where-Object { $_.Trim() })) {
+    $kv = $pair -split '=', 2
+    if ($kv.Count -ne 2) { Write-Host "Не зрозумів -JobYears: '$pair' (треба частина=рік,рік)" -ForegroundColor Red; exit 1 }
+    $jobYearMap[$kv[0].Trim()] = @($kv[1] -split '[,\s]+' | Where-Object { $_ -match '^\d{4}$' })
+}
+$mYears = if ($jobYearMap.ContainsKey("masters")) { @($jobYearMap["masters"]) } else { $yearList }
+$pYears = if ($jobYearMap.ContainsKey("pdf")) { @($jobYearMap["pdf"]) } else { $yearList }
 $jobSet = if ($Jobs -eq "all") { @("masters", "pdf", "scans", "archive", "naps2") } else { @($Jobs -split '[,\s]+' | Where-Object { $_ }) }
 $bad0 = @($jobSet | Where-Object { @("masters", "pdf", "scans", "archive", "naps2") -notcontains $_ })
 if ($bad0.Count) { Write-Host "Невідома частина в -Jobs: $($bad0 -join ', ')" -ForegroundColor Red; exit 1 }
@@ -56,13 +66,13 @@ function Add-Copy { param([string]$Job, [string]$Src, [string]$Dst, [string]$Kin
 foreach ($k in $jobSet) {
     switch ($k) {
         "masters" {
-            if ($yearList.Count) {
+            if ($mYears.Count) {
                 Add-Copy "masters" (Join-Path $script:NS_MASTERS "_catalog") (Join-Path $root "NS_MASTERS\_catalog")
-                foreach ($y in $yearList) { Add-Copy "masters" (Join-Path $script:NS_MASTERS $y) (Join-Path $root "NS_MASTERS\$y") }
+                foreach ($y in $mYears) { Add-Copy "masters" (Join-Path $script:NS_MASTERS $y) (Join-Path $root "NS_MASTERS\$y") }
             } else { Add-Copy "masters" $script:NS_MASTERS (Join-Path $root "NS_MASTERS") }
         }
         "pdf" {
-            if ($yearList.Count) { foreach ($y in $yearList) { Add-Copy "pdf" (Join-Path $script:NS_PDF $y) (Join-Path $root "NS_PDF\$y") } }
+            if ($pYears.Count) { foreach ($y in $pYears) { Add-Copy "pdf" (Join-Path $script:NS_PDF $y) (Join-Path $root "NS_PDF\$y") } }
             else { Add-Copy "pdf" $script:NS_PDF (Join-Path $root "NS_PDF") }
         }
         "scans"   { Add-Copy "scans" $PSScriptRoot (Join-Path $root "Scans") }
@@ -118,7 +128,7 @@ if (-not $VerifyOnly) {
             $j.delta = [math]::Max(0L, $j.need - $j.already)
         }
     }
-    Write-Host ("Вільно на {0}: {1}{2}" -f $Dest, (Format-Gb $free), $(if ($yearList.Count) { "  (роки: $($yearList -join ', '))" } else { "" }))
+    Write-Host ("Вільно на {0}: {1}{2}" -f $Dest, (Format-Gb $free), $(if ($mYears.Count -or $pYears.Count) { "  (майстри: $(if ($mYears.Count) { $mYears -join ', ' } else { 'усі' }); PDF: $(if ($pYears.Count) { $pYears -join ', ' } else { 'усі' }))" } else { "" }))
     foreach ($jn in ($jobSet | Sort-Object { $prio[$_] })) {
         $d = [long](($copy | Where-Object { $_.job -eq $jn } | ForEach-Object { $_.delta } | Measure-Object -Sum).Sum)
         Write-Host ("  {0,-8} треба дописати {1}" -f $jn, (Format-Gb $d))
@@ -198,8 +208,10 @@ if (-not $VerifyOnly) {
         if ($skipped.Count) { exit 3 }
         exit 0
     }
-    if (($Years -or $Jobs -ne "all") -and -not $failNoFit) {
-        $scope = [ordered]@{ years = @($yearList | ForEach-Object { [int]$_ }); jobs = @($jobSet); written = (Get-Date).ToString("s") }
+    if (($Years -or $Jobs -ne "all" -or $JobYears) -and -not $failNoFit) {
+        $scope = [ordered]@{ years = @($yearList | ForEach-Object { [int]$_ }); jobs = @($jobSet) }
+        if ($jobYearMap.Count) { $yb = [ordered]@{}; foreach ($k in $jobYearMap.Keys) { $yb[$k] = @($jobYearMap[$k] | ForEach-Object { [int]$_ }) }; $scope.years_by_job = $yb }
+        $scope.written = (Get-Date).ToString("s")
         [IO.File]::WriteAllText((Join-Path $root "_scope.json"), ($scope | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     }
     if ($failNoFit) { Write-Host "Резерв майстрів НЕ зроблено (немає місця) — звірку пропущено." -ForegroundColor Red; exit 1 }
@@ -211,7 +223,7 @@ if ($jobSet -notcontains "masters") { Write-Host "Частина masters не в
 $bm = Join-Path $root "NS_MASTERS"
 if (-not (Test-Path $bm)) { Write-Host "Копії майстрів немає: $bm" -ForegroundColor Red; exit 1 }
 Write-Host ""
-Write-Host ("Звірка копії майстрів за SHA-256{0}..." -f $(if ($yearList.Count) { " (роки: $($yearList -join ', '))" } else { "" })) -ForegroundColor Cyan
+Write-Host ("Звірка копії майстрів за SHA-256{0}..." -f $(if ($mYears.Count) { " (роки: $($mYears -join ', '))" } else { "" })) -ForegroundColor Cyan
 $ok = 0; $bad = @(); $stale = @()
 # -Quick: сторінка, звірена раніше з ТИМ САМИМ хешем маніфеста, вдруге не хешується.
 # Ключ включає хеш, тож заміна сторінки (ns-rescan) змусить звірити її знову.
@@ -223,7 +235,7 @@ $skippedQuick = 0
 $issueDirs = @(Get-ChildItem $script:NS_MASTERS -Directory -Recurse -Depth 1 | Where-Object { Test-Path (Join-Path $_.FullName "_manifest.json") })
 foreach ($d in $issueDirs) {
     $rel = $d.FullName.Substring($script:NS_MASTERS.Length).TrimStart('\')
-    if ($yearList.Count -and ($yearList -notcontains $rel.Split('\')[0])) { continue }
+    if ($mYears.Count -and ($mYears -notcontains $rel.Split('\')[0])) { continue }
     $man = Read-NsManifest -IssueDir $d.FullName
     $bd = Join-Path $bm $rel
     foreach ($p in $man.pages) {
@@ -246,7 +258,7 @@ Write-Host "  відкладених файлів у копії _catalog\removed
 Write-Host ("  вільно на диску: {0:N2} ГБ" -f ((Get-PSDrive ((Get-Item $Dest).PSDrive.Name)).Free/1GB))
 if (-not $VerifyOnly) {
     Set-Content -Path (Join-Path $root "_backup_stamp.txt") -Value ("{0}  сторінок {1}, розбіжностей {2}{3}" -f (Get-Date).ToString("s"), $ok, ($bad.Count + $stale.Count),
-                $(if ($yearList.Count) { ", роки $($yearList -join ',')" } else { "" })) -Encoding UTF8
+                $(if ($mYears.Count) { ", роки $($mYears -join ',')" } else { "" })) -Encoding UTF8
 }
 if ($bad.Count + $stale.Count) { exit 1 }
 if ($skipped.Count) {
