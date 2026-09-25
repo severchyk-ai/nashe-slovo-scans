@@ -1,23 +1,25 @@
 ﻿# Завершити день: зберегти роботу.
 #
-#   .\ns-endday.ps1              git commit + push теки Scans, резерв на зовнішній диск (якщо підключено)
+#   .\ns-endday.ps1              git commit + push теки Scans; резерв на КОЖЕН підключений диск із NS_BACKUP
 #   .\ns-endday.ps1 -DryRun      лише показати, що було б зроблено
-#   .\ns-endday.ps1 -NoBackup    лише git
-#   .\ns-endday.ps1 -Dest F:\    диск резерву вказано явно (за умовчанням шукається диск із текою NS_BACKUP)
+#   .\ns-endday.ps1 -NoBackup    лише git;   -NoGit   лише резерв
+#   .\ns-endday.ps1 -Dest F:\    лише цей диск;   -FullVerify   повна звірка копій незалежно від давності
 #
 # Що береже (КОНВЕЄР.md, «Збереження роботи»):
-#   1. скрипти й документи проєкту — git (коміт щодня, push на GitHub, коли сховище підключено);
-#   2. майстри + маніфести + готові PDF — ns-backup -Quick на зовнішній диск: копіюється лише змінене,
-#      звіряється за SHA-256 лише те, що ще не звірено.
-# Майстри й NS_WORK у git не потрапляють ніколи (.gitignore). Немає диска — це не помилка: git робиться,
-# а в кінці сказано, скільки сторінок лишилось без резерву.
-# Права адміністратора не потрібні.
+#   1. скрипти й документи проєкту — git (коміт щодня, push на GitHub);
+#   2. майстри + маніфести + PDF — на зовнішні диски. Кожен диск має файл <диск>\NS_BACKUP\_scope.json
+#      {"years":[2002],"jobs":["masters","pdf"]} — це ЄДИНЕ, що на ньому береже ns-backup (-Quick: копіюється лише
+#      змінене, звіряється за SHA-256 лише нове). Диск без _scope.json НЕ ЧІПАЄТЬСЯ — скрипт лише каже про нього.
+#   3. підсумок: скільки сторінок за роками не має копії на жодному підключеному диску (для нових років без диска
+#      це видно щодня), і скільки вільно на кожному диску.
+# Раз на 7 днів на кожному диску — повна звірка за SHA-256 (-Quick не бачить тихого псування вже звіреного файлу).
+# Майстри й NS_WORK у git не потрапляють ніколи (.gitignore). Права адміністратора не потрібні.
 
 param(
     [switch]$DryRun,
     [switch]$NoBackup,
-    [switch]$FullVerify,         # повна звірка копії за SHA-256 незалежно від давності останньої
-    [switch]$NoGit,              # лише резерв (для випробувань на піску)
+    [switch]$FullVerify,
+    [switch]$NoGit,
     [string]$Dest
 )
 
@@ -31,8 +33,15 @@ $result = [ordered]@{ git = "не робилось"; push = "не робилос
 
 function Write-Step { param([string]$Text) Write-Host ""; Write-Host "  $Text" -ForegroundColor Cyan }
 
+function Invoke-Git {
+    <#  git без винятків PowerShell: повертає @{ Code; Text }. #>
+    param([string[]]$GitArgs)
+    $out = & git -C $PSScriptRoot @GitArgs 2>&1 | Out-String
+    return @{ Code = $LASTEXITCODE; Text = $out.Trim() }
+}
+
 function Invoke-NsScript {
-    <#  Запустити .ps1 і чесно повернути код завершення. Якщо скрипт не запустився чи не вказав код
+    <#  Запустити .ps1 і чесно повернути код завершення. Якщо скрипт не стартував чи не вказав код
         (тоді $LASTEXITCODE лишається від попередньої команди й брехав би «ok»), — ненульовий код. #>
     param([string]$Path, [hashtable]$Params = @{})
     if (-not (Test-Path $Path)) { Write-Host "     Немає скрипта: $Path" -ForegroundColor Red; return 97 }
@@ -42,11 +51,13 @@ function Invoke-NsScript {
     return [int]$LASTEXITCODE
 }
 
-function Invoke-Git {
-    <#  git без винятків PowerShell: повертає @{ Code; Text }. #>
-    param([string[]]$GitArgs)
-    $out = & git -C $PSScriptRoot @GitArgs 2>&1 | Out-String
-    return @{ Code = $LASTEXITCODE; Text = $out.Trim() }
+function Get-LastLogTime {
+    <#  Час останнього запису журналу, що містить $Pattern. #>
+    param([string]$Pattern)
+    if (-not (Test-Path $logFile)) { return $null }
+    $hit = @(Get-Content $logFile -Encoding UTF8 | Where-Object { $_ -match $Pattern }) | Select-Object -Last 1
+    if ($hit -and $hit -match '^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})') { return [datetime]::Parse($Matches[1]) }
+    return $null
 }
 
 Write-Host ""
@@ -95,7 +106,6 @@ if ($NoGit) {
         }
     }
 
-    # push
     $remotes = @((Invoke-Git @("remote")).Text -split "`r?`n" | Where-Object { $_.Trim() })
     if ($remotes.Count -eq 0) {
         Write-Host "     GitHub ще не підключено (remote немає) — push пропущено; коміт лежить локально." -ForegroundColor Yellow
@@ -116,93 +126,117 @@ if ($NoGit) {
     }
 }
 
-# ------------------------------------------------------------------ 2. резерв
-Write-Step "2. Резерв майстрів і PDF (зовнішній диск)"
-$lastBackup = $null
-if (Test-Path $logFile) {
-    $hit = @(Get-Content $logFile -Encoding UTF8 | Where-Object { $_ -match 'резерв: ok' }) | Select-Object -Last 1
-    if ($hit -and $hit -match '^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})') { $lastBackup = [datetime]::Parse($Matches[1]) }
-}
-
-$destRoot = $null
+# ------------------------------------------------------------------ 2. резерв на кожний диск
+Write-Step "2. Резерв майстрів і PDF (зовнішні диски)"
+$disks = @()   # @{ Root; Scope (або $null); Years; Jobs; Result }
 if ($NoBackup) {
     Write-Host "     Пропущено (-NoBackup)."
     $result.backup = "пропущено за проханням"
 } else {
-    if ($Dest) {
-        if (Test-Path $Dest) { $destRoot = $Dest }
-    } else {
-        $cand = @(Get-PSDrive -PSProvider FileSystem | Where-Object {
-                      $_.Root -ne "C:\" -and $_.Root -ne "$($env:SystemDrive)\" -and (Test-Path (Join-Path $_.Root "NS_BACKUP")) })
-        if ($cand.Count -eq 1) { $destRoot = $cand[0].Root }
-        elseif ($cand.Count -gt 1) {
-            Write-Host ("     Знайдено кілька дисків із NS_BACKUP: {0}. Вкажи -Dest." -f (($cand | ForEach-Object { $_.Root }) -join ", ")) -ForegroundColor Yellow
-        }
+    $roots = @()
+    if ($Dest) { if (Test-Path $Dest) { $roots = @($Dest) } }
+    else {
+        $roots = @(Get-PSDrive -PSProvider FileSystem | Where-Object {
+                       $_.Root -ne "C:\" -and $_.Root -ne "$($env:SystemDrive)\" -and (Test-Path (Join-Path $_.Root "NS_BACKUP")) } | ForEach-Object { $_.Root })
     }
-    if (-not $destRoot) {
-        Write-Host "     Диск резерву не підключено (немає диска з текою NS_BACKUP) — копію не зроблено." -ForegroundColor Yellow
-        Write-Host "     Підключи диск і запусти «Завершити день» ще раз." -ForegroundColor Yellow
+    if ($roots.Count -eq 0) {
+        Write-Host "     Жодного диска з текою NS_BACKUP не підключено — копію не зроблено." -ForegroundColor Yellow
+        Write-Host "     Підключи диск(и) і запусти «Завершити день» ще раз." -ForegroundColor Yellow
         $result.backup = "диск не підключено"
-    } elseif ($DryRun) {
-        Write-Host "     Диск знайдено: $destRoot — було б: ns-backup -Quick."
-        $result.backup = "було б: ns-backup -Quick на $destRoot"
-    } else {
-        Write-Host "     Диск: $destRoot" -ForegroundColor Green
-        $rc = Invoke-NsScript -Path (Join-Path $PSScriptRoot "ns-backup.ps1") -Params @{ Dest = $destRoot; Quick = $true }
+    }
+    $parts = @(); $fulls = @()
+    foreach ($r in $roots) {
+        $d = @{ Root = $r; Scope = $null; Years = @(); Jobs = @(); Result = "" }
+        $scopeFile = Join-Path $r "NS_BACKUP\_scope.json"
+        Write-Host ""
+        Write-Host ("     Диск {0}  (вільно {1:N1} ГБ)" -f $r, ((Get-PSDrive $r.Substring(0, 1)).Free / 1GB)) -ForegroundColor White
+        if (-not (Test-Path $scopeFile)) {
+            Write-Host "       Немає _scope.json — диск НЕ ЧІПАЮ. Що на ньому берегти, скажи ns-backup:" -ForegroundColor Yellow
+            Write-Host ("         .\ns-backup.ps1 -Dest {0} -Years <роки> -Jobs masters,pdf   (він запише _scope.json)" -f $r) -ForegroundColor DarkGray
+            $d.Result = "без _scope.json — не чіпав"
+            $parts += "$r $($d.Result)"; $disks += $d; continue
+        }
+        try { $d.Scope = Get-Content $scopeFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
+        if (-not $d.Scope) {
+            Write-Host "       _scope.json не читається — диск НЕ ЧІПАЮ." -ForegroundColor Red
+            $d.Result = "_scope.json зіпсований"; $parts += "$r ЗБІЙ: $($d.Result)"; $disks += $d; continue
+        }
+        $d.Years = @($d.Scope.years | ForEach-Object { [int]$_ }); $d.Jobs = @($d.Scope.jobs)
+        Write-Host ("       Береже: роки {0}; частини {1}" -f $(if ($d.Years.Count) { $d.Years -join ", " } else { "усі" }), ($d.Jobs -join ", "))
+        $bp = @{ Dest = $r; Quick = $true; Jobs = ($d.Jobs -join ",") }
+        if ($d.Years.Count) { $bp.Years = ($d.Years -join ",") }
+        if ($DryRun) { $d.Result = "було б: ns-backup -Quick"; $parts += "$r $($d.Result)"; $disks += $d; continue }
+        $rc = Invoke-NsScript -Path (Join-Path $PSScriptRoot "ns-backup.ps1") -Params $bp
         if ($rc -eq 0) {
-            $result.backup = "ok на $destRoot"
-            # -Quick не бачить тихого псування вже звіреного файлу з тим самим розміром і часом,
-            # тому раз на 7 днів — повна звірка всієї копії за SHA-256 (мінуси: кілька хвилин).
-            $lastFull = $null
-            if (Test-Path $logFile) {
-                $hf = @(Get-Content $logFile -Encoding UTF8 | Where-Object { $_ -match 'повна звірка: ok' }) | Select-Object -Last 1
-                if ($hf -and $hf -match '^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})') { $lastFull = [datetime]::Parse($Matches[1]) }
-            }
+            $d.Result = "ok"
+            # повна звірка раз на 7 днів на кожному диску
+            $lastFull = Get-LastLogTime ("повна звірка \[" + [regex]::Escape($r) + "\]: ok")
             if ($FullVerify -or -not $lastFull -or ((Get-Date) - $lastFull).TotalDays -ge 7) {
                 Write-Host ""
-                Write-Host "     Повна звірка копії за SHA-256 (раз на 7 днів; кілька хвилин)…" -ForegroundColor Cyan
-                $rf = Invoke-NsScript -Path (Join-Path $PSScriptRoot "ns-backup.ps1") -Params @{ Dest = $destRoot; VerifyOnly = $true }
-                if ($rf -eq 0) { $result.full = "ok" }
-                else { $result.full = "ЗБІЙ (код $rf) — копія не збігається з оригіналом або звірка не пройшла"; Write-Host "     Повна звірка НЕ пройшла!" -ForegroundColor Red }
-            } else {
-                $result.full = "не потрібна (остання {0})" -f $lastFull.ToString("dd.MM")
+                Write-Host "       Повна звірка копії за SHA-256 (раз на 7 днів; кілька хвилин)…" -ForegroundColor Cyan
+                $vp = @{ Dest = $r; VerifyOnly = $true; Jobs = "masters" }
+                if ($d.Years.Count) { $vp.Years = ($d.Years -join ",") }
+                $rf = Invoke-NsScript -Path (Join-Path $PSScriptRoot "ns-backup.ps1") -Params $vp
+                if ($rf -eq 0) { $fulls += "повна звірка [$r]: ok" }
+                else { $fulls += "повна звірка [$r]: НЕ пройшла (код $rf)"; $d.Result = "ok, але повна звірка НЕ пройшла"; Write-Host "       Повна звірка НЕ пройшла!" -ForegroundColor Red }
             }
         } else {
-            $result.backup = "ЗБІЙ (код $rc) на $destRoot"
-            Write-Host "     Резерв не завершено — див. повідомлення вище." -ForegroundColor Red
+            $d.Result = "ЗБІЙ (код $rc)"
+            Write-Host "       Резерв на $r не завершено — див. повідомлення вище." -ForegroundColor Red
         }
+        $parts += "$r $($d.Result)"; $disks += $d
     }
+    if ($roots.Count -gt 0) { $result.backup = ($parts -join "; ") }
+    if ($fulls.Count) { $result.full = ($fulls -join "; ") }
 }
 
-# ------------------------------------------------------------------ 3. що лишилось без резерву
-Write-Step "3. Що не захищено"
-$since = if ($result.backup -like "ok*") { Get-Date } else { $lastBackup }
-$unprot = 0; $unprotIssues = @()
-if ($since) {
-    foreach ($d in (Get-ChildItem $script:NS_MASTERS -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\d{4}$' } |
-                    ForEach-Object { Get-ChildItem $_.FullName -Directory })) {
-        $m = Read-NsManifest -IssueDir $d.FullName
-        if (-not $m) { continue }
-        $n = @($m.pages | Where-Object { $_.scanned_at -and ([datetime]::Parse($_.scanned_at) -gt $since) }).Count
-        if ($n -gt 0) { $unprot += $n; $unprotIssues += $m.seq_first }
-    }
-}
-if ($result.backup -like "ok*") {
-    Write-Host "     Майстри й PDF скопійовано й звірено — усе, що є, у резерві." -ForegroundColor Green
-} elseif ($since) {
-    Write-Host ("     Останній вдалий резерв за журналом: {0}." -f $since.ToString("dd.MM.yyyy HH:mm"))
-    if ($unprot -gt 0) {
-        Write-Host ("     БЕЗ РЕЗЕРВУ ПІСЛЯ НЬОГО: {0} стор. (номери {1})." -f $unprot, (($unprotIssues | Select-Object -First 8) -join ", ")) -ForegroundColor Yellow
-    } else {
-        Write-Host "     Після нього нових сторінок не було."
-    }
+# ------------------------------------------------------------------ 3. що не захищено
+Write-Step "3. Скільки сторінок має копію"
+$noCopyTotal = -1
+$activeDisks = @($disks | Where-Object { $_.Scope })
+if ($NoBackup) {
+    Write-Host "     (пропущено разом із резервом)"
+} elseif ($activeDisks.Count -eq 0) {
+    $lb = Get-LastLogTime 'резерв: .*ok'
+    if ($lb) { Write-Host ("     Диска немає; останній вдалий резерв за журналом: {0}." -f $lb.ToString("dd.MM.yyyy HH:mm")) }
+    else { Write-Host "     Диска немає, і журнал не знає жодного резерву цим скриптом." -ForegroundColor Yellow }
 } else {
-    Write-Host "     Журнал не знає жодного резерву цим скриптом — скільки сторінок не захищено, не відомо." -ForegroundColor Yellow
-    Write-Host "     (Раніше резерв робився вручну: ns-backup -Dest ...; його дату видно в <диск>\NS_BACKUP\_backup_stamp.txt.)" -ForegroundColor DarkGray
+    # копія сторінки = файл з тим самим розміром у NS_MASTERS\<рік>\<тека>\ на диску, чий _scope.json охоплює цей рік
+    $byYear = @{}
+    foreach ($dir in (Get-ChildItem $script:NS_MASTERS -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\d{4}$' })) {
+        $y = [int]$dir.Name
+        foreach ($idir in (Get-ChildItem $dir.FullName -Directory)) {
+            $m = Read-NsManifest -IssueDir $idir.FullName
+            if (-not $m) { continue }
+            foreach ($p in @($m.pages)) {
+                if (-not $byYear.ContainsKey($y)) { $byYear[$y] = @{ total = 0; copied = 0 } }
+                $byYear[$y].total++
+                foreach ($d in $activeDisks) {
+                    if ($d.Jobs -notcontains "masters") { continue }
+                    if ($d.Years.Count -and ($d.Years -notcontains $y)) { continue }
+                    $cf = Join-Path $d.Root ("NS_BACKUP\NS_MASTERS\{0}\{1}\{2}" -f $y, $idir.Name, $p.file)
+                    if ((Test-Path -LiteralPath $cf) -and ((Get-Item -LiteralPath $cf).Length -eq [long]$p.bytes)) { $byYear[$y].copied++; break }
+                }
+            }
+        }
+    }
+    $noCopyTotal = 0
+    foreach ($y in ($byYear.Keys | Sort-Object)) {
+        $t = $byYear[$y].total; $c = $byYear[$y].copied; $w = $t - $c; $noCopyTotal += $w
+        if ($w -eq 0) { Write-Host ("     {0}: {1} стор., усі мають копію" -f $y, $t) -ForegroundColor Green }
+        else { Write-Host ("     {0}: {1} стор., БЕЗ КОПІЇ {2}" -f $y, $t, $w) -ForegroundColor $(if ($c -eq 0) { "Red" } else { "Yellow" }) }
+    }
+    if ($noCopyTotal -gt 0) {
+        Write-Host ("     УСЬОГО БЕЗ КОПІЇ: {0} стор. — потрібен диск (або вільне місце) для років, де копії немає." -f $noCopyTotal) -ForegroundColor Red
+    } else {
+        Write-Host "     Усі сторінки каталогу мають копію на підключених дисках." -ForegroundColor Green
+    }
+    foreach ($d in $activeDisks) { Write-Host ("     Диск {0}: вільно {1:N1} ГБ" -f $d.Root, ((Get-PSDrive $d.Root.Substring(0, 1)).Free / 1GB)) -ForegroundColor DarkGray }
 }
 
 # ------------------------------------------------------------------ журнал
-$entry = "{0}  git: {1}; push: {2}; резерв: {3}; повна звірка: {4}" -f (Get-Date).ToString("s"), $result.git, $result.push, $result.backup, $result.full
+$entry = "{0}  git: {1}; push: {2}; резерв: {3}; {4}; без копії: {5}" -f (Get-Date).ToString("s"), $result.git, $result.push, $result.backup,
+         $(if ($result.full -like "повна звірка*") { $result.full } else { "повна звірка: " + $result.full }), $(if ($noCopyTotal -ge 0) { $noCopyTotal } else { "не рахувалось" })
 if (-not $DryRun) { Add-Content -Path $logFile -Value $entry -Encoding UTF8 }
 
 Write-Host ""
@@ -211,7 +245,8 @@ Write-Host ("  git    : {0}" -f $result.git)
 Write-Host ("  push   : {0}" -f $result.push)
 Write-Host ("  резерв : {0}" -f $result.backup)
 Write-Host ("  звірка : {0}" -f $result.full)
+if ($noCopyTotal -ge 0) { Write-Host ("  без копії: {0} стор." -f $noCopyTotal) -ForegroundColor $(if ($noCopyTotal -gt 0) { "Red" } else { "Green" }) }
 Write-Host ""
-$bad = ($result.Values | Where-Object { $_ -match 'НЕ ВДАВСЯ|ЗБІЙ|НЕ пройшла' }).Count
+$bad = @($result.Values | Where-Object { $_ -match 'НЕ ВДАВСЯ|ЗБІЙ|НЕ пройшла' }).Count
 if ($bad -gt 0) { exit 1 }
 exit 0
