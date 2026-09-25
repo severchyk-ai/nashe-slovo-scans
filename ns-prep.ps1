@@ -298,13 +298,15 @@ foreach ($p in ($man.pages | Sort-Object { [int]$_.n })) {
         # де корінець за вказівкою оператора не ріжеться, бо нитки в тексті (2280/1, 2).
         # Repair-NsHoles однаково лишає пляму, біля якої немає чистого паперу.
         $bigMin = if ($holeRule) { $holeRule.BigMinMm } else { 0 }
+        $holeMin = 1.5
         if ($holeRule -and $man.PSObject.Properties.Name -contains 'fill_threads_pages' -and $man.fill_threads_pages) {
-            if (@($man.fill_threads_pages -split '[,\s]+' | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ }) -contains [int]$p.n) { $bigMin = 0 }
+            # нитки 2280/1 — щілини 1,1 x 2,9 мм: з межею 1,5 відкидались за розміром (24 шт.)
+            if (@($man.fill_threads_pages -split '[,\s]+' | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ }) -contains [int]$p.n) { $bigMin = 0; $holeMin = 1.0 }
         }
         if ($holeRule -and $doFill) {
             # смуга, яку однаково відріже page_edge корінця, не заважає шукати великі дірки
             $skip = if ($edgeMap.ContainsKey([int]$p.n) -and $edgeMap[[int]$p.n].ContainsKey($holeRule.Side)) { $edgeMap[[int]$p.n][$holeRule.Side] } else { 0 }
-            $nh = Repair-NsHoles -Path $dst -Side $holeRule.Side -ZoneMm $holeRule.ZoneMm -BigMinMm $bigMin -SkipMm $skip -PaperColor $fillColor `
+            $nh = Repair-NsHoles -Path $dst -Side $holeRule.Side -ZoneMm $holeRule.ZoneMm -BigMinMm $bigMin -MinMm $holeMin -SkipMm $skip -PaperColor $fillColor `
                                  -ReportDir (Join-Path (Split-Path $prep -Parent) "holes") `
                                  -ReportName ("p{0:D2}" -f [int]$p.n)
             if ($nh -gt 0) { $edgeNote = ($edgeNote, ("залатано проколів: {0} ({1})" -f $nh, $holeRule.Side) | Where-Object { $_ }) -join "; " }
