@@ -165,10 +165,16 @@ if ($NoBackup) {
         Write-Host ("       Береже: роки {0}; частини {1}" -f $(if ($d.Years.Count) { $d.Years -join ", " } else { "усі" }), ($d.Jobs -join ", "))
         $bp = @{ Dest = $r; Quick = $true; Jobs = ($d.Jobs -join ",") }
         if ($d.Years.Count) { $bp.Years = ($d.Years -join ",") }
-        if ($DryRun) { $d.Result = "було б: ns-backup -Quick"; $parts += "$r $($d.Result)"; $disks += $d; continue }
+        if ($DryRun) {
+            $bp.DryRun = $true; $bp.Remove("Quick")
+            $rc = Invoke-NsScript -Path (Join-Path $PSScriptRoot "ns-backup.ps1") -Params $bp
+            $d.Result = switch ($rc) { 0 { "було б: ns-backup -Quick, місця досить" } 3 { "було б: ПРОПУЩЕНО за браком місця" } default { "було б: НЕ ВЛІЗЕ (код $rc)" } }
+            $parts += "$r $($d.Result)"; $disks += $d; continue
+        }
         $rc = Invoke-NsScript -Path (Join-Path $PSScriptRoot "ns-backup.ps1") -Params $bp
-        if ($rc -eq 0) {
-            $d.Result = "ok"
+        if ($rc -eq 0 -or $rc -eq 3) {
+            $d.Result = if ($rc -eq 3) { "ok, але ПРОПУЩЕНО за браком місця (червоні рядки вище)" } else { "ok" }
+            if ($rc -eq 3) { Write-Host "       Частину не скопійовано — немає місця (див. вище)." -ForegroundColor Red }
             # повна звірка раз на 7 днів на кожному диску
             $lastFull = Get-LastLogTime ("повна звірка \[" + [regex]::Escape($r) + "\]: ok")
             if ($FullVerify -or -not $lastFull -or ((Get-Date) - $lastFull).TotalDays -ge 7) {
@@ -178,7 +184,7 @@ if ($NoBackup) {
                 if ($d.Years.Count) { $vp.Years = ($d.Years -join ",") }
                 $rf = Invoke-NsScript -Path (Join-Path $PSScriptRoot "ns-backup.ps1") -Params $vp
                 if ($rf -eq 0) { $fulls += "повна звірка [$r]: ok" }
-                else { $fulls += "повна звірка [$r]: НЕ пройшла (код $rf)"; $d.Result = "ok, але повна звірка НЕ пройшла"; Write-Host "       Повна звірка НЕ пройшла!" -ForegroundColor Red }
+                else { $fulls += "повна звірка [$r]: НЕ пройшла (код $rf)"; $d.Result = "$($d.Result); повна звірка НЕ пройшла"; Write-Host "       Повна звірка НЕ пройшла!" -ForegroundColor Red }
             }
         } else {
             $d.Result = "ЗБІЙ (код $rc)"
