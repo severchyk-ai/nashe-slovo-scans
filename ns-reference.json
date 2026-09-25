@@ -1,0 +1,13 @@
+{
+  "2227": {
+    "source": "старий лептоп, 16.09.2026 (ПЕРЕЇЗД.md, розд. 8)",
+    "versions": "ImageMagick 7.1.2-29 Q16, Tesseract 5.4.0, ocrmypdf 17.11.0",
+    "pages": 10,
+    "page_sizes": ["869.52x1197.60"],
+    "bytes": 19772222,
+    "words": 15161,
+    "suspicious": 101,
+    "cast": 3.0,
+    "qc_clean": true
+  }
+}
