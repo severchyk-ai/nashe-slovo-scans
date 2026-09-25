@@ -45,6 +45,13 @@ function Show-NsOverview {
     Write-Host ("  Останній : {0}  ({1}, № {2} у році)" -f `
                 $last.seq_first, $last.date, $last.issue_no_in_year)
 
+    $stateParts = @()
+    foreach ($st in $script:NS_STATES) {
+        $c = @($rows | Where-Object { $_.PSObject.Properties.Name -contains 'state' -and $_.state -eq $st }).Count
+        if ($c -gt 0) { $stateParts += ("{0} {1}" -f $st, $c) }
+    }
+    if ($stateParts.Count -gt 0) { Write-Host ("  Конвеєр  : " + ($stateParts -join " · ")) }
+
     $gaps = @(Test-NsSeqContinuity)
     if ($gaps.Count -gt 0) {
         Write-Host "  УВАГА    : розриви в нумерації:" -ForegroundColor Yellow
@@ -179,6 +186,15 @@ try {
             Write-Host ("  [{0}]  Прийняти номер {1}  ({2}, {3} стор.) — підвали й перевірка" -f $n, $u.seq_first, $u.date, $u.pages) -ForegroundColor Yellow
         }
 
+        $inReview = @($rows | Where-Object { $_.PSObject.Properties.Name -contains 'state' -and $_.state -in @("review", "fix") })
+        if ($inReview.Count -gt 0) {
+            $nFix = @($inReview | Where-Object { $_.state -eq "fix" }).Count
+            $n++
+            $actions["$n"] = @{ kind = "review" }
+            Write-Host ("  [{0}]  Огляд   на огляді: {1}{2} — PDF без OCR, позначені сторінки, прийняти / поправити" -f $n, ($inReview.Count - $nFix),
+                        $(if ($nFix) { ", чекають Claude: $nFix" } else { "" })) -ForegroundColor Yellow
+        }
+
         $n++
         $actions["$n"] = @{ kind = "new" }
         if ($sugg) {
@@ -194,7 +210,7 @@ try {
         $n++; $actions["$n"] = @{ kind = "open" }
         Write-Host ("  [{0}]  Відкрити теку каталогу" -f $n)
 
-        $ready = @($rows | Where-Object { $_.status -eq "scanned" -and -not ($_.PSObject.Properties.Name -contains 'state' -and $_.state -in @("scanning", "scanned")) } |
+        $ready = @($rows | Where-Object { $_.status -eq "scanned" -and -not ($_.PSObject.Properties.Name -contains 'state' -and $_.state -in @("scanning", "scanned", "review", "fix")) } |
                            Sort-Object { [int]$_.seq_first })
         $n++; $actions["$n"] = @{ kind = "pdf"; ready = $ready }
         if ($ready.Count -gt 0) {
@@ -220,6 +236,7 @@ try {
         switch ($a.kind) {
             "resume" { & "$PSScriptRoot\ns-scan.ps1" -Seq $a.seq }
             "accept" { & "$PSScriptRoot\ns-accept.ps1" -Seq $a.seq }
+            "review" { & "$PSScriptRoot\ns-review.ps1" }
             "new"    { Invoke-NsNewIssue -Suggestion $sugg }
             "verify" { & "$PSScriptRoot\ns-verify.ps1" }
             "open"   { Start-Process explorer.exe $script:NS_MASTERS }
