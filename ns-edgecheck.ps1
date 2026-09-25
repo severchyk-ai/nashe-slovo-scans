@@ -43,7 +43,17 @@ function Save-EdgeStrip {
 $prep = Join-Path (Join-Path $script:NS_WORK "$Seq") "prep"
 $script:issueYear = 0
 $idir = Find-NsIssueDir -Seq $Seq
-if ($idir) { $script:issueYear = [int](Read-NsManifest -IssueDir $idir).year }
+$rotMap = @{}; $edgeMap = @{}
+if ($idir) {
+    $imf = Read-NsManifest -IssueDir $idir
+    $script:issueYear = [int]$imf.year
+    if ($imf.PSObject.Properties.Name -contains 'page_rotate' -and $imf.page_rotate) {
+        foreach ($pair in ($imf.page_rotate -split ',')) { if ($pair.Trim() -match '^(\d+)\s*:\s*(\d+)$') { $rotMap[[int]$Matches[1]] = [int]$Matches[2] } }
+    }
+    if ($imf.PSObject.Properties.Name -contains 'page_edge' -and $imf.page_edge) {
+        foreach ($tok in ($imf.page_edge -split '[,\s]+')) { if ($tok -match '^(\d+)([LRTBlrtb])([\d.]+)$') { $edgeMap["{0}{1}" -f [int]$Matches[1], $Matches[2].ToUpper()] = [double]$Matches[3] } }
+    }
+}
 $tifs = @(Get-ChildItem $prep -Filter "p*.tif" -File | Sort-Object Name)
 if ($Pages) {
     $want = @($Pages -split '[,;]' | ForEach-Object { "p{0:D2}.tif" -f [int]$_ })
@@ -57,6 +67,14 @@ foreach ($t in $tifs) {
     $spine = Get-NsSpineRule -Year ([int]$script:issueYear) -PageNo ([int]$t.BaseName.Substring(1))
     $spArgs = @{}
     if ($spine) { $spArgs = @{ SpineSide = $spine.Side; SpineCleanMm = $spine.CleanMm; SpineHoleMaxMm = $spine.HoleMaxMm } }
+    # правило зовнішнього боку (25.09.2026) — як у ns-prep; корінець із page_edge маніфеста
+    $pn = [int]$t.BaseName.Substring(1)
+    $spSide = Get-NsSpineSide -PageNo $pn -Rotate $(if ($rotMap.ContainsKey($pn)) { $rotMap[$pn] } else { 0 })
+    if ($spSide) {
+        $spArgs.OuterSide = @{ Left = "Right"; Right = "Left"; Top = "Bottom"; Bottom = "Top" }[$spSide]
+        $key = "{0}{1}" -f $pn, $spSide.Substring(0, 1)
+        if ($edgeMap.ContainsKey($key)) { $spArgs.SpineCutMm = $edgeMap[$key] }
+    }
     $cut = Get-NsEdgeCut -EdgeProfile $prof @spArgs
     Write-Host ""
     Write-Host "== $Seq $($t.BaseName)" -ForegroundColor Cyan

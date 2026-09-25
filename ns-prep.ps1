@@ -20,7 +20,10 @@ param(
     [double]$BandMaxMm = 8.0,    # глибше цього обрізка країв не робиться взагалі
     [string]$RotatePages,        # ручний поворот: "11:90,13:270" — записується в маніфест
     [string]$EdgeExtra,          # примусове вичищення: "1L3 5L3 8R3" — сторінка, край, мм
-    [switch]$FillHoles           # заповнювати великі проколи тоном паперу (лише з дозволу оператора)
+    [switch]$FillHoles,          # заповнювати великі проколи тоном паперу (лише з дозволу оператора)
+    [switch]$NoOuterRule,        # зовнішній бік різати як раніше (8 мм), а не лише до паперу (правило 25.09.2026)
+    [string]$FillThreadsPages,   # "1,2": заростати й дрібні нитки на цих сторінках (за вказівкою оператора) — пишеться в маніфест
+    [switch]$NoSpineBand         # не обрізати смугу скла на корінці (для заміру ниток у ns-prepare)
 )
 
 . "$PSScriptRoot\ns-lib.ps1"
@@ -96,6 +99,11 @@ if ($FillHoles) {
     $man | Add-Member -NotePropertyName fill_holes -NotePropertyValue $true -Force
     Write-NsManifest -IssueDir $issueDir -Manifest $man
     Write-Host "  заповнення проколів дозволено оператором — записано в маніфест" -ForegroundColor Yellow
+}
+if ($FillThreadsPages) {
+    $man | Add-Member -NotePropertyName fill_threads_pages -NotePropertyValue $FillThreadsPages -Force
+    Write-NsManifest -IssueDir $issueDir -Manifest $man
+    Write-Host "  нитки заростають на сторінках $FillThreadsPages — записано в маніфест" -ForegroundColor Yellow
 }
 
 $prep = Get-NsWorkDir -Seq $Seq -Stage "prep"
@@ -201,6 +209,14 @@ foreach ($p in ($man.pages | Sort-Object { [int]$_.n })) {
     # 2-2,5 мм з лівого боку (17.09.2026).
     $forcedBand = if ($edgeMap.ContainsKey([int]$p.n)) { $edgeMap[[int]$p.n] } else { @{} }
     foreach ($side in @($forcedBand.Keys)) { $band[$side] = 0 }
+    # -NoSpineBand (ns-prepare, перший прохід): і на корінці детектор скла не ріже.
+    # Там зріз дає page_edge із заміру ниток, а page_edge у другому проході детектор
+    # вимикає — тож і міряти треба від того самого, сирого краю (2268/6, 25.09.2026:
+    # скло 6,8 мм обрізано лише в першому проході, зріз 5,5 ліг від сирого краю).
+    if ($NoSpineBand) {
+        $nsb = Get-NsSpineSide -PageNo ([int]$p.n) -Rotate $rotate
+        if ($nsb) { $band[$nsb] = 0 }
+    }
 
     # ЗАПОБІЖНИК: смуга невкритого скла фізично мала. Виміряно на 704 значеннях
     # із 39 номерів: медіана 0, 95-й перцентиль 33 px (2 мм), майже все нижче
@@ -270,13 +286,28 @@ foreach ($p in ($man.pages | Sort-Object { [int]$_.n })) {
         if ($doFill -and $man.PSObject.Properties.Name -contains 'fill_skip_pages' -and $man.fill_skip_pages) {
             if (@($man.fill_skip_pages -split '[,\s]+' | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ }) -contains [int]$p.n) { $doFill = $false }
         }
-        if ($spine -and $doFill) {
+        # Рік без NS_SPINE_RULES (2001), але оператор велів заростити дірки номера
+        # (fill_holes у маніфесті; 2280, 25.09.2026): бік корінця за парністю,
+        # зона й межа великих — як у 2002 (ті самі дірки 5,7-6,4 мм на 2280).
+        $holeRule = $spine
+        if (-not $holeRule -and $doFill) {
+            $hs = Get-NsSpineSide -PageNo ([int]$p.n) -Rotate $rotate
+            if ($hs) { $holeRule = @{ Side = $hs; ZoneMm = 16.0; BigMinMm = 4.0 } }
+        }
+        # fill_threads_pages ("1,2"): на цих сторінках заростають і дрібні нитки —
+        # де корінець за вказівкою оператора не ріжеться, бо нитки в тексті (2280/1, 2).
+        # Repair-NsHoles однаково лишає пляму, біля якої немає чистого паперу.
+        $bigMin = if ($holeRule) { $holeRule.BigMinMm } else { 0 }
+        if ($holeRule -and $man.PSObject.Properties.Name -contains 'fill_threads_pages' -and $man.fill_threads_pages) {
+            if (@($man.fill_threads_pages -split '[,\s]+' | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ }) -contains [int]$p.n) { $bigMin = 0 }
+        }
+        if ($holeRule -and $doFill) {
             # смуга, яку однаково відріже page_edge корінця, не заважає шукати великі дірки
-            $skip = if ($edgeMap.ContainsKey([int]$p.n) -and $edgeMap[[int]$p.n].ContainsKey($spine.Side)) { $edgeMap[[int]$p.n][$spine.Side] } else { 0 }
-            $nh = Repair-NsHoles -Path $dst -Side $spine.Side -ZoneMm $spine.ZoneMm -BigMinMm $spine.BigMinMm -SkipMm $skip -PaperColor $fillColor `
+            $skip = if ($edgeMap.ContainsKey([int]$p.n) -and $edgeMap[[int]$p.n].ContainsKey($holeRule.Side)) { $edgeMap[[int]$p.n][$holeRule.Side] } else { 0 }
+            $nh = Repair-NsHoles -Path $dst -Side $holeRule.Side -ZoneMm $holeRule.ZoneMm -BigMinMm $bigMin -SkipMm $skip -PaperColor $fillColor `
                                  -ReportDir (Join-Path (Split-Path $prep -Parent) "holes") `
                                  -ReportName ("p{0:D2}" -f [int]$p.n)
-            if ($nh -gt 0) { $edgeNote = ($edgeNote, ("залатано проколів: {0} ({1})" -f $nh, $spine.Side) | Where-Object { $_ }) -join "; " }
+            if ($nh -gt 0) { $edgeNote = ($edgeNote, ("залатано проколів: {0} ({1})" -f $nh, $holeRule.Side) | Where-Object { $_ }) -join "; " }
         }
         # Замальовування тонкої лінії краю (Repair-NsEdgeLine) ВИМКНЕНО
         # 23.09.2026: воно лишало сіру смугу згори кожної сторінки (латка
@@ -286,7 +317,19 @@ foreach ($p in ($man.pages | Sort-Object { [int]$_.n })) {
         # Функція лишилася в ns-lib на випадок, якщо колись знадобиться.
         $spArgs = @{}
         if ($spine) { $spArgs = @{ SpineSide = $spine.Side; SpineCleanMm = $spine.CleanMm; SpineHoleMaxMm = $spine.HoleMaxMm } }
-        $ec = Get-NsEdgeCut -EdgeProfile (Get-NsEdgeProfile -Path $dst -Dpi 400 -DepthMm 25) -CleanMm $EdgeCleanMm @spArgs
+        # Зовнішній бік (протилежний корінцю) — лише до початку паперу, глибше лише
+        # для симетрії полів і не глибше за корінець (рішення оператора 25.09.2026,
+        # Get-NsEdgeCut -OuterSide). Корінець із page_edge передаємо як є.
+        if (-not $NoOuterRule) {
+            $spSide = Get-NsSpineSide -PageNo ([int]$p.n) -Rotate $rotate
+            if ($spSide) {
+                $spArgs.OuterSide = @{ Left = "Right"; Right = "Left"; Top = "Bottom"; Bottom = "Top" }[$spSide]
+                if ($edgeMap.ContainsKey([int]$p.n) -and $edgeMap[[int]$p.n].ContainsKey($spSide)) { $spArgs.SpineCutMm = [double]$edgeMap[[int]$p.n][$spSide] }
+            }
+        }
+        # 35 мм (було 25): правило зовнішнього боку шукає колонку друку зовні, а
+        # вона на 2002 починається з 22-24 мм (2328/1) — у 25 мм не вміщалась.
+        $ec = Get-NsEdgeCut -EdgeProfile (Get-NsEdgeProfile -Path $dst -Dpi 400 -DepthMm 35) -CleanMm $EdgeCleanMm @spArgs
         $px = @{}
         $mmSide = @{}
         $freeSide = @{}

@@ -88,6 +88,23 @@ def analyse(path, side, zone_mm, big_mm, hole_zone):
     band_px = 0
     while band_px < frac_depth.size and frac_depth[band_px] > 0.5:
         band_px += 1
+    # друга мірка смуги — як детектор скла в ns-prep (Get-BandOffsets): середня
+    # яскравість стовпця по всій довжині < 150. Сіре скло 2268/6 (6,8 мм) частку
+    # «темніше за папір - 90» на половині довжини не давало, а середнє — дає.
+    colmean = cv2.blur(gray.mean(axis=0).reshape(1, -1).astype(np.float32), (max(1, int(0.35 * PX)), 1)).ravel()
+    # білий клин після випрямлення перекосу (0-0,5 мм, 255) перед склом не рахується:
+    # без цього лічба зупинялась на нулі (2268/6: клин 0,5 мм, далі скло до 7,5 мм)
+    band2 = 0
+    skip = int(2.0 * PX)
+    while band2 < min(skip, colmean.size) and colmean[band2] >= 150:
+        band2 += 1
+    if band2 >= skip:
+        band2 = 0
+    else:
+        while band2 < colmean.size and colmean[band2] < 150:
+            band2 += 1
+    if band2 / PX <= 8.0:
+        band_px = max(band_px, band2)
     dark = dark_any & (chroma < 0.12 * 255)
     dark[:, :band_px + 1] = False
     dark = cv2.morphologyEx(dark.astype(np.uint8), cv2.MORPH_CLOSE,
@@ -147,6 +164,7 @@ def main():
     ap.add_argument("--suggest", action="store_true")     # показати запропонований page_edge корінця
     ap.add_argument("--jsonout", default="")               # зберегти замір і пропозицію в JSON
     ap.add_argument("--margin", type=float, default=0.5)   # запас над найдальшою ниткою, мм
+    ap.add_argument("--expect-big", type=int, default=2)  # скільки великих дірок від зшивача чекати на сторінці (2001: 0)
     a = ap.parse_args()
     files = {}
     for f in glob.glob(os.path.join(a.dir, "*p[0-9][0-9].tif")):
@@ -212,27 +230,48 @@ def suggest(a, rows):
     for p, side, r in rows:
         fars = [t[4] for t in r["threads"]]
         ps = r["print_start"]
+        # Смуга краю (скло, тінь обрізу): суцільна по довжині (band) або довга пляма від самого
+        # краю, не глибша 8 мм. Зріз корінця мусить накрити й її: з 25.09.2026 ns-prepare міряє
+        # на prep БЕЗ обрізки скла на корінці (-NoSpineBand), бо page_edge у другому проході
+        # вимикає детектор скла — і зріз, поміряний від обрізаного краю, лягав від сирого
+        # (2268/6: скло 6,8 мм, зріз 5,5 — у PDF лишилась темна лінія).
+        strip = r["band"]
+        for (_al, ln, near, far) in r["long"]:
+            if near <= 1.0 and far <= 8.0 and ln >= 20.0:
+                strip = max(strip, far)
         item = {"n": p, "side": side, "threads": len(fars), "far_max": round(max(fars), 1) if fars else None,
-                "bigs": len(r["bigs"]), "print_start": None if ps is None else round(ps, 1), "flags": []}
+                "bigs": len(r["bigs"]), "print_start": None if ps is None else round(ps, 1),
+                "strip": round(strip, 1), "flags": []}
+        item["strip_cut"] = math.ceil((strip + a.margin) / 0.5) * 0.5 if strip > 0 else 0.0
+        if ps is not None:
+            item["cap"] = math.floor((ps - 1.5) / 0.5) * 0.5
         if fars:
-            cut = math.ceil((max(fars) + a.margin) / 0.5) * 0.5
-            if ps is not None and cut > ps - 1.5:
-                cap = math.floor((ps - 1.5) / 0.5) * 0.5
-                item["flags"].append("Review: нитки до %.1f мм, друк з %.1f мм — зріз обмежено %.1f" % (max(fars), ps, cap))
-                cut = cap
+            deep = max(max(fars), strip)
+            cut = math.ceil((deep + a.margin) / 0.5) * 0.5
+            if ps is not None and cut > item["cap"]:
+                item["flags"].append("Review: нитки/смуга до %.1f мм, друк з %.1f мм — зріз обмежено %.1f" % (deep, ps, item["cap"]))
+                cut = item["cap"]
             item["cut"] = cut
             cuts.append(cut)
         else:
             item["cut"] = None
             item["flags"].append("нитки не знайдено")
-        if len(r["bigs"]) != 2:
-            item["flags"].append("великих дірок %d (очікувалось 2)" % len(r["bigs"]))
+        if len(r["bigs"]) != a.expect_big:
+            item["flags"].append("великих дірок %d (очікувалось %d)" % (len(r["bigs"]), a.expect_big))
         out.append(item)
     med = sorted(cuts)[len(cuts) // 2] if cuts else None
+    # глибина ниток ВІД КРАЮ ПАПЕРУ (за смугою): аркуш, покладений глибше під скло,
+    # має нитки глибше на ширину смуги (2268/6: смуга 7,7 мм, нитки злиплись зі
+    # смугою й не виділились; медіана номера 6 мм лишила дірки в PDF)
+    rels = sorted(it["far_max"] - it["strip"] for it in out if it["far_max"] is not None)
+    med_rel = rels[len(rels) // 2] if rels else 0.0
     for it in out:
         if it["cut"] is None and med is not None:
-            it["cut"] = med
-            it["flags"].append("Review: зріз узято з медіани номера %.1f" % med)
+            by_strip = math.ceil((it["strip"] + med_rel + a.margin) / 0.5) * 0.5 if it["strip"] > 0 else 0.0
+            it["cut"] = max(med, it["strip_cut"], by_strip)
+            if "cap" in it and it["cut"] > it["cap"]:
+                it["cut"] = it["cap"]
+            it["flags"].append("Review: ниток не видно; зріз %.1f = max(медіана номера %.1f, смуга %.1f + нитки від краю паперу %.1f)" % (it["cut"], med, it["strip"], med_rel))
     tokens = ["%d%s%s" % (it["n"], it["side"], ("%g" % it["cut"])) for it in out if it["cut"] is not None]
     edge = " ".join(tokens)
     print()

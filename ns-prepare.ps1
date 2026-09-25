@@ -51,6 +51,10 @@ function Invoke-NsStep {
 Write-Log ("ПІДГОТОВКА {0} ({1}, {2} стор.)" -f $Seq, $man.date, @($man.pages).Count) White
 $rot = if ($man.PSObject.Properties.Name -contains 'page_rotate' -and $man.page_rotate) { [string]$man.page_rotate } else { "" }
 $summary = [ordered]@{ seq = $Seq; date = $man.date; pages = @($man.pages).Count }
+# Великі дірки від зшивача (і їхнє заростання) — лише в роках із NS_SPINE_RULES (2002).
+# 2001 (25.09.2026): лише нитки корінця до 5 мм (2268, 2275), великих дірок 0 —
+# сюди номер іде заради заміру ниток: корінець за заміром, а не сталі 8 мм.
+$hasBig = [bool](Get-NsSpineRule -Year ([int]$man.year) -PageNo 1)
 
 # --- 1-3: замір -----------------------------------------------------------
 $spineJson = Join-Path $work "spine.json"
@@ -61,7 +65,7 @@ if ($Edge) {
     # замір з попереднього запуску (spine.json) лишається в підсумку — щоб повторний прогін не стирав числа для звіту
     if (Test-Path $spineJson) { $summary.spine = (Get-Content $spineJson -Raw -Encoding UTF8 | ConvertFrom-Json) }
 } else {
-    $null = Invoke-NsStep "prep -NoEdgeClean (геометрія без чистки)" (Join-Path $PSScriptRoot "ns-prep.ps1") @{ Seq = $Seq; NoEdgeClean = $true; Force = $true }
+    $null = Invoke-NsStep "prep -NoEdgeClean (геометрія без чистки)" (Join-Path $PSScriptRoot "ns-prep.ps1") @{ Seq = $Seq; NoEdgeClean = $true; Force = $true; NoSpineBand = $true }
     $ec = Invoke-NsStep "edgecheck -Brief (позначки нагляду до чистки)" (Join-Path $PSScriptRoot "ns-edgecheck.ps1") @{ Seq = $Seq; Brief = $true }
     $watch = @($ec | Where-Object { $_ -match 'НАГЛЯД' })
     $summary.edge_watch = @($watch | ForEach-Object { $_.Trim() })
@@ -69,7 +73,7 @@ if ($Edge) {
     foreach ($w in $watch) { Write-Log ("      " + $w.Trim()) Yellow }
 
     Write-Log ("[{0}] замір ниток (ns-spinescan.py)" -f (Get-Date).ToString("HH:mm:ss")) Cyan
-    $sa = @((Join-Path $work "prep"), "--suggest", "--jsonout", $spineJson)
+    $sa = @((Join-Path $work "prep"), "--suggest", "--jsonout", $spineJson, "--expect-big", $(if ($hasBig) { "2" } else { "0" }))
     if ($rot) { $sa += @("--rotate", $rot) }
     $env:PYTHONIOENCODING = "utf-8"
     $so = & $py (Join-Path $PSScriptRoot "ns-spinescan.py") @sa 2>&1 | ForEach-Object { "$_" }
@@ -87,7 +91,9 @@ if ($Edge) {
 $summary.edge = $edge
 
 # --- 4: зріз корінця й заростання -----------------------------------------
-$null = Invoke-NsStep "prep -FillHoles -EdgeExtra (зріз корінця, заростання)" (Join-Path $PSScriptRoot "ns-prep.ps1") @{ Seq = $Seq; FillHoles = $true; Force = $true; EdgeExtra = $edge }
+$pp = @{ Seq = $Seq; Force = $true; EdgeExtra = $edge }
+if ($hasBig) { $pp.FillHoles = $true }
+$null = Invoke-NsStep ("prep {0}-EdgeExtra (зріз корінця{1})" -f $(if ($hasBig) { "-FillHoles " } else { "" }), $(if ($hasBig) { ", заростання" } else { "" })) (Join-Path $PSScriptRoot "ns-prep.ps1") $pp
 $filled = 0; $left = 0; $holePages = @()
 $hd = Join-Path $work "holes"
 foreach ($f in @(Get-ChildItem $hd -Filter "p*_log.txt" -ErrorAction SilentlyContinue)) {
@@ -98,8 +104,9 @@ foreach ($f in @(Get-ChildItem $hd -Filter "p*_log.txt" -ErrorAction SilentlyCon
     if ($b -gt 0) { $holePages += ("{0}: залишено {1}" -f $f.BaseName.Substring(0, 3), $b) }
 }
 $pagesN = @($man.pages).Count
-$summary.holes = [ordered]@{ filled = $filled; expected = 2 * $pagesN; left_near_print = $left; pages_with_left = $holePages }
-Write-Log ("    дірок зарощено {0} із очікуваних {1}; лишено біля друку/за формою: {2} {3}" -f $filled, (2 * $pagesN), $left, ($holePages -join "; ")) $(if ($filled -lt 2 * $pagesN) { "Yellow" } else { "Green" })
+$expHoles = if ($hasBig) { 2 * $pagesN } else { 0 }
+$summary.holes = [ordered]@{ filled = $filled; expected = $expHoles; left_near_print = $left; pages_with_left = $holePages }
+Write-Log ("    дірок зарощено {0} із очікуваних {1}; лишено біля друку/за формою: {2} {3}" -f $filled, $expHoles, $left, ($holePages -join "; ")) $(if ($filled -lt $expHoles) { "Yellow" } else { "Green" })
 
 # --- 5: render ------------------------------------------------------------
 $rl = Invoke-NsStep "render (тон, рамка, JPEG)" (Join-Path $PSScriptRoot "ns-render.ps1") @{ Seq = $Seq; Force = $true }

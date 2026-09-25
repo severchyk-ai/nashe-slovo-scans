@@ -282,10 +282,19 @@ $fm = [int]($FrameMm / 25.4 * $Dpi)
 # знімається з країв пропорційно запасу. Ціль — найменша сторінка групи, але не
 # менша, ніж дозволяє запас найтіснішої: друк не ріжемо заради формату. Якщо
 # якась сторінка все ж менша за ціль — доповнюється рамкою, і журнал це каже.
-function Get-NsSpan([int]$Extra, [double]$FreeA, [double]$FreeB, [int]$Dpi) {
+# -Even (ліво/право, 25.09.2026, оператор: «сторінка не посередині»): спершу
+# з БІЛЬШОГО запасу, доки запаси не зрівняються, решту навпіл — поле друку
+# з обох боків стає однаковим, а не лишається в тій самій пропорції.
+function Get-NsSpan([int]$Extra, [double]$FreeA, [double]$FreeB, [int]$Dpi, [switch]$Even) {
     $fa = [int]($FreeA / 25.4 * $Dpi); $fb = [int]($FreeB / 25.4 * $Dpi)
     if ($Extra -le 0 -or ($fa + $fb) -le 0) { return @(0, 0) }
     $take = [math]::Min($Extra, $fa + $fb)
+    if ($Even) {
+        $first = [math]::Min($take, [math]::Abs($fa - $fb)); $rest = $take - $first
+        $a = [int][math]::Floor($rest / 2); if ($fa -gt $fb) { $a += $first }
+        $a = [math]::Min($fa, $a); $b = [math]::Min($fb, $take - $a); $a = [math]::Min($fa, $take - $b)
+        return @($a, $b)
+    }
     $a = [math]::Min($fa, [int][math]::Round($take * $fa / ($fa + $fb)))
     $b = [math]::Min($fb, $take - $a); $a = [math]::Min($fa, $take - $b)
     return @($a, $b)
@@ -325,7 +334,14 @@ if (-not $NoPad) {
             foreach ($v in $fhs) { if ($v -gt $th * $k) { $th = [int][math]::Ceiling($v / $k) } }
         }
         foreach ($p in $items) {
-            $lr = Get-NsSpan -Extra ($p.CW - $tw) -FreeA $p.Free.fLeft -FreeB $p.Free.fRight -Dpi $Dpi
+            # Симетрія полів (25.09.2026): знімаємо не лише лишок до цілі, а й різницю
+            # запасів ліво/право (= різницю полів друку), але не більше, ніж потім
+            # поверне дозволене розтягнення FitGrowMaxPct — інакше рамка нерівна (2328/9).
+            $exLR = $p.CW - $tw
+            $need = [int]([math]::Abs($p.Free.fLeft - $p.Free.fRight) * $mmPx)
+            $floorLR = if ($FitScale) { [int][math]::Ceiling($tw / (1 + $FitGrowMaxPct / 100.0)) } else { $tw }
+            if ($need -gt $exLR) { $exLR = [math]::Max($exLR, [math]::Min($need, $p.CW - $floorLR)) }
+            $lr = Get-NsSpan -Extra $exLR -FreeA $p.Free.fLeft -FreeB $p.Free.fRight -Dpi $Dpi -Even
             $tb = Get-NsSpan -Extra ($p.CH - $th) -FreeA $p.Free.fTop  -FreeB $p.Free.fBottom -Dpi $Dpi
             $p.CX += $lr[0]; $p.CW -= ($lr[0] + $lr[1])
             $p.CY += $tb[0]; $p.CH -= ($tb[0] + $tb[1])

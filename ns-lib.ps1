@@ -465,6 +465,7 @@ function Get-NsEdgeProfile {
         $res["${side}Rows"] = $rows
         $res["${side}Cols"] = $cols
     }
+    $res["Path"] = $Path; $res["Dpi"] = $Dpi   # для піксельного виміру колонки (Get-NsInkColumns)
     return $res
 }
 
@@ -708,6 +709,85 @@ function Get-NsEdgeDirtDepth {
     return [math]::Min($MaxMm, $p90 + 0.5)
 }
 
+function Get-NsDarkEdgeCut {
+    <#  Лише темний край (смуга скла, лінія кришки, тінь обрізу) — правило верху й
+        низу (17.09.2026), а з 25.09.2026 і ЗОВНІШНЬОГО боку. Темний край =
+        суцільно від краю ті глибини (у перших 6 мм), де частка темної фарби
+        перевищує фон глибини 3-8 мм більш ніж на 3 %; ріжемо до його кінця +
+        0,5 мм. Темна плашка на всю глибину (фон > 50 %) — 0. Скісну лінію краю
+        (2319/4) міряє Get-NsEdgeDirtDepth по відрізках.                      #>
+    param($EdgeProfile, [string]$Side, [double]$StepMm = 0.5)
+    $ink = $EdgeProfile["${Side}Ink"]; $n = $ink.Count
+    $b0 = [int](3.0 / $StepMm); $b1 = [math]::Min($n - 1, [int](8.0 / $StepMm))
+    $base = (@($ink[$b0..$b1] | Sort-Object))[[int](($b1 - $b0) / 2)]
+    $runEnd = -1
+    for ($i = 0; $i -lt [math]::Min($n, [int](6.0 / $StepMm)); $i++) {
+        if ($ink[$i] -gt $base + 0.03) { $runEnd = $i } elseif ($i -gt 1) { break }
+    }
+    $cut = if ($runEnd -ge 0) { ($runEnd + 1) * $StepMm + 0.5 } else { 0.0 }
+    $why = ""
+    if ($base -gt 0.5) { $cut = 0.0; $why = "темна плашка до краю — не ріжу" }
+    else {
+        $dd = Get-NsEdgeDirtDepth -EdgeProfile $EdgeProfile -Side $Side -StepMm $StepMm
+        if ($dd -gt $cut) { $cut = $dd; $why = ("скісна лінія краю — ріжу {0:N1}" -f $dd) }
+    }
+    return @{ Cut = $cut; Why = $why; Plate = ($base -gt 0.5) }
+}
+
+function Get-NsInkColumns {
+    <#  Частка темних ПІКСЕЛІВ (папір - 70) у кожному шарі 0,5 мм углиб від краю,
+        по середніх 76 % довжини краю — те саме, що міряє ns-margins.py на render.
+        Навіщо окремо від Get-NsEdgeProfile: там клітинка 0,5 x 3 мм спершу
+        усереднюється, і тонкий текст у ній світлішає вище порога — колонку
+        профіль бачив на 4 мм глибше, ніж вона є (2328/1: 23,5 проти 19,2 мм).
+        Повертає [double[]] або $null.                                        #>
+    param([string]$Path, [string]$Side, [int]$Paper, [int]$Dpi = 400, [double]$DepthMm = 40.0)
+    $wh = (& magick identify -ping -format "%w|%h" "$Path[0]" 2>$null) -split '\|'
+    if ($wh.Count -lt 2) { return $null }
+    $W = [int]$wh[0]; $H = [int]$wh[1]
+    $d = [int]($DepthMm / 25.4 * $Dpi); $cols = [int]($DepthMm / 0.5)
+    $y0 = [int]($H * 0.12); $ly = [int]($H * 0.76); $x0 = [int]($W * 0.12); $lx = [int]($W * 0.76)
+    $spec = @{
+        Left   = @("${d}x$ly+0+$y0")
+        Right  = @("${d}x$ly+$($W - $d)+$y0", "-flop")
+        Top    = @("${lx}x$d+$x0+0", "-rotate", "-90")
+        Bottom = @("${lx}x$d+$x0+$($H - $d)", "-rotate", "90")
+    }[$Side]
+    $tmp = Join-Path $env:TEMP ("ns_ink_" + [guid]::NewGuid().ToString("N") + ".gray")
+    $pct = [math]::Max(1, $Paper - 70) / 255.0 * 100
+    & magick "$Path[0]" -crop $spec[0] +repage @($spec | Select-Object -Skip 1) -colorspace Gray `
+             -threshold ("{0:N2}%" -f $pct).Replace(',', '.') -type Grayscale -depth 8 `
+             -filter Box -resize "${cols}x1!" -depth 8 "gray:$tmp" 2>$null | Out-Null
+    # -type Grayscale обов'язковий: після -threshold картинка двобітна, і
+    # зменшення без нього дає суцільне біле (перевірено на 2328/1, 25.09.2026)
+    if (-not (Test-Path $tmp)) { return $null }
+    $b = [IO.File]::ReadAllBytes($tmp); Remove-Item $tmp -Force
+    if ($b.Length -ne $cols) { return $null }
+    $out = New-Object 'double[]' $cols
+    for ($i = 0; $i -lt $cols; $i++) { $out[$i] = 1.0 - $b[$i] / 255.0 }
+    return $out
+}
+
+function Get-NsPrintBlock {
+    <#  Де починається колонка друку: перший шар (0,5 мм) не ближче FromMm, від
+        якого три шари поспіль (1,5 мм) мають >= 3 % темних ПІКСЕЛІВ (папір - 70)
+        у середніх 76 % довжини краю (Get-NsInkColumns; те саме визначення, що
+        в ns-margins.py, — тож A/B міряється тією самою міркою, якою ріжемо).
+        Без шляху до зображення — частка відрізків профілю (грубіше: тонкий
+        текст губиться, колонка виходить на ~4 мм глибше). -1, якщо друку нема. #>
+    param($EdgeProfile, [string]$Side, [double]$FromMm = 0.0, [double]$StepMm = 0.5, [double]$Thr = 0.03)
+    $ink = $null
+    if ($EdgeProfile["Path"]) {
+        $ink = Get-NsInkColumns -Path $EdgeProfile["Path"] -Side $Side -Paper $EdgeProfile["${Side}Paper"] -Dpi $EdgeProfile["Dpi"]
+    }
+    if (-not $ink) { $ink = $EdgeProfile["${Side}Ink"] }
+    $n = $ink.Count
+    for ($i = [int][math]::Ceiling($FromMm / $StepMm); $i -lt $n - 2; $i++) {
+        if ($ink[$i] -ge $Thr -and $ink[$i+1] -ge $Thr -and $ink[$i+2] -ge $Thr) { return $i * $StepMm }
+    }
+    return -1.0
+}
+
 function Get-NsEdgeCut {
     <#  Скільки різати з кожного краю і скільки чистого поля лишається до друку.
         Вхід — Get-NsEdgeProfile (крок 0,5 мм): частка фарби (Frac), частка
@@ -740,9 +820,24 @@ function Get-NsEdgeCut {
         чистила нічого; версія 2 різала 8 мм з обох боків і 8 мм чистого низу;
         версія 3 («до останнього бруду») відрізала фото на 2266/10 зліва.
         Одна частка фарби не розрізняє смугу скла, фото і фоновий малюнок —
-        потрібні всі три мірки.                                              #>
+        потрібні всі три мірки.
+
+        ЗОВНІШНІЙ БІК (-OuterSide, рішення оператора 25.09.2026): протилежний
+        корінцю ріжеться ЛИШЕ до початку газетного паперу — як верх і низ
+        (Get-NsDarkEdgeCut). Глибше — лише щоб поле друку зовні зрівнялося з
+        полем корінця (-SpineCutMm, якщо корінець задано page_edge; інакше —
+        власний зріз корінця), по чистому папері, до OuterMaxMm (8) і не ближче
+        1,5 мм до друку. Спершу стояла межа «не глибше корінця» — на 2001 вона
+        лишала +1,3…+1,8 мм несиметрії (друк там ближче до корінця); оператор
+        її зняв 25.09.2026. Причина правила:
+        8 мм ззовні, як на корінці, давали на 2002 поле зовні на 1-10 мм менше
+        за поле корінця (2328: медіана -7,1 мм, ns-margins.py) — «сторінка не
+        посередині». Друк зовні не ближче 1,5 мм (колонка і місцевий запобіжник).
+        Free зовні: якщо корінець задано вручну (там Free = 0, ns-render його не
+        чіпає), зведення розміру не сміє зняти зовні більше, ніж до поля корінця. #>
     param($EdgeProfile, [double]$CleanMm = 8.0, [double]$StepMm = 0.5,
-          [string]$SpineSide = "", [double]$SpineCleanMm = 12.0, [double]$SpineHoleMaxMm = 11.0)
+          [string]$SpineSide = "", [double]$SpineCleanMm = 12.0, [double]$SpineHoleMaxMm = 11.0,
+          [string]$OuterSide = "", [double]$SpineCutMm = -1, [double]$OuterMaxMm = 8.0)
     if (-not $EdgeProfile) { return $null }
     $out = @{}
     $guard = 1.5
@@ -755,19 +850,8 @@ function Get-NsEdgeCut {
         $hm = if ($isSpine) { $SpineHoleMaxMm } else { 7.5 }
         $why = ""; $cut = 0.0; $contentAt = -1
         if ($side -eq "Top" -or $side -eq "Bottom") {
-            $b0 = [int](3.0 / $StepMm); $b1 = [math]::Min($n - 1, [int](8.0 / $StepMm))
-            $base = (@($ink[$b0..$b1] | Sort-Object))[[int](($b1 - $b0) / 2)]
-            $runEnd = -1
-            for ($i = 0; $i -lt [math]::Min($n, [int](6.0 / $StepMm)); $i++) {
-                if ($ink[$i] -gt $base + 0.03) { $runEnd = $i } elseif ($i -gt 1) { break }
-            }
-            $cut = if ($runEnd -ge 0) { ($runEnd + 1) * $StepMm + 0.5 } else { 0.0 }
-            if ($base -gt 0.5) { $cut = 0.0; $why = "темна плашка до краю — не ріжу" }
-            else {
-                # скісна лінія краю (2319/4): міряємо по відрізках, а не по всій ширині
-                $dd = Get-NsEdgeDirtDepth -EdgeProfile $EdgeProfile -Side $side -StepMm $StepMm
-                if ($dd -gt $cut) { $cut = $dd; $why = ("скісна лінія краю — ріжу {0:N1}" -f $dd) }
-            }
+            $dk = Get-NsDarkEdgeCut -EdgeProfile $EdgeProfile -Side $side -StepMm $StepMm
+            $cut = $dk.Cut; $why = $dk.Why
             # друк: після смуги <= 2 % — перша темна фарба >= 5 % на 1 мм
             $gap = $false
             for ($i = [int]($cut / $StepMm); $i -lt $n - 1; $i++) {
@@ -836,7 +920,67 @@ function Get-NsEdgeCut {
         if ($isSpine) { $why = ("корінець {0}; {1}" -f $cm, $why).TrimEnd(' ', ';') }
         $out[$side] = @{ Cut = [math]::Round($cut, 1); Free = [math]::Round($free, 1); Why = $why; Review = $review }
     }
+    if ($OuterSide -and $out.ContainsKey($OuterSide)) {
+        $sp = @{ Left = "Right"; Right = "Left"; Top = "Bottom"; Bottom = "Top" }[$OuterSide]
+        $forcedSpine = ($SpineCutMm -ge 0)
+        $cutS = if ($forcedSpine) { $SpineCutMm } else { [double]$out[$sp].Cut }
+        $dk = Get-NsDarkEdgeCut -EdgeProfile $EdgeProfile -Side $OuterSide -StepMm $StepMm
+        $cO = $dk.Cut
+        $why = if ($dk.Why) { "зовні: " + $dk.Why } else { "зовні лише темний край {0:N1}" -f $cO }
+        $pO = Get-NsPrintBlock -EdgeProfile $EdgeProfile -Side $OuterSide -FromMm $cO -StepMm $StepMm
+        $pS = Get-NsPrintBlock -EdgeProfile $EdgeProfile -Side $sp -FromMm $cutS -StepMm $StepMm
+        $locS = Get-NsEdgeLocal -EdgeProfile $EdgeProfile -Side $sp -StepMm $StepMm -HoleMaxMm $(if ($SpineSide -eq $sp) { $SpineHoleMaxMm } else { 7.5 })
+        if ($pS -lt 0 -and $locS.ContentMm -ge $cutS) { $pS = $locS.ContentMm }
+        $mS = if ($pS -ge 0) { $pS - $cutS } else { -1.0 }
+        $why = ("{0} [друк зовні {1:N1}, поле корінця {2:N1}]" -f $why, $pO, $mS)
+        if ($pO -ge 0 -and $mS -ge 0 -and ($pO - $cO) - $mS -ge 0.5) {
+            # Симетрію тут НЕ ріжемо, лише кажемо, скільки бракує: її знімає ns-render
+            # (Get-NsSpan -Even), бо лише там видно спільний розмір номера. Жорсткий
+            # зріз тут (перша версія 25.09.2026) робив сторінку з друком під корінцем
+            # вужчою за решту на 6,8 мм (2328/9) — рамка нерівна.
+            $want = [math]::Min($OuterMaxMm, $pO - $mS)
+            if ($want -gt $cO) { $why = ("{0}; до симетрії бракує {1:N1} — знімає ns-render" -f $why, ($want - $cO)) }
+        }
+        # друк — не ближче 1,5 мм: колонка і місцевий запобіжник
+        $loc = Get-NsEdgeLocal -EdgeProfile $EdgeProfile -Side $OuterSide -StepMm $StepMm
+        $lim = [double]::MaxValue
+        if ($pO -ge 0) { $lim = $pO - $guard }
+        if ($loc.ContentMm -ge 0) { $lim = [math]::Min($lim, $loc.ContentMm - $guard) }
+        if ($cO -gt $lim) { $cO = [math]::Max(0.0, $lim); $why = ("{0}; друк близько — {1:N1}" -f $why, $cO) }
+        $pEff = if ($pO -ge 0) { $pO } else { $ink = $EdgeProfile["${OuterSide}Ink"]; $ink.Count * $StepMm }
+        if ($loc.ContentMm -ge 0) { $pEff = [math]::Min($pEff, $loc.ContentMm) }
+        $freeO = [math]::Max(0.0, $pEff - $guard - $cO)
+        if ($dk.Plate) { $freeO = 0.0 }
+        # корінець задано page_edge (Free = 0): ns-render знімає лише зовні — не далі
+        # симетрії і разом із темним краєм не глибше OuterMaxMm (оператор, 25.09.2026)
+        if ($forcedSpine -and $mS -ge 0) {
+            $freeO = [math]::Min($freeO, [math]::Max(0.0, ($pEff - $cO) - $mS))
+            $freeO = [math]::Min($freeO, [math]::Max(0.0, $OuterMaxMm - $cO))
+        }
+        $out[$OuterSide] = @{ Cut = [math]::Round($cO, 1); Free = [math]::Round($freeO, 1); Why = $why; Review = $false
+                              PrintMm = $pO; SpineMarginMm = $mS }
+    }
     return $out
+}
+
+function Get-NsSpineSide {
+    <#  Бік корінця сторінки: непарна — ліворуч, парна — праворуч (так лягли
+        проколи на 2319 і 2280); повернута сторінка (вкладка) — корінець їде з
+        нею. -rotate 90 = за годинником. Для будь-якого року, не лише з
+        NS_SPINE_RULES: потрібен правилу зовнішнього боку (25.09.2026).        #>
+    param([int]$PageNo, [int]$Rotate = 0)
+    $side = if ($PageNo % 2 -eq 1) { "Left" } else { "Right" }
+    if ($Rotate -ne 0) {
+        $map = @{
+            90  = @{ Left = "Top";    Right = "Bottom" }
+            180 = @{ Left = "Right";  Right = "Left"   }
+            270 = @{ Left = "Bottom"; Right = "Top"    }
+        }
+        $m = $map[[int]$Rotate]
+        if (-not $m) { return "" }
+        $side = $m[$side]
+    }
+    return $side
 }
 
 function Get-BandOffsets {
@@ -1516,20 +1660,11 @@ function Get-NsSpineRule {
     param([int]$Year, [int]$PageNo, [int]$Rotate = 0)
     if (-not $script:NS_SPINE_RULES.ContainsKey($Year)) { return $null }
     $r = $script:NS_SPINE_RULES[$Year]
-    $side = if ($PageNo % 2 -eq 1) { "Left" } else { "Right" }
     # Сторінку вже повернуто (вкладка надрукована впоперек) — корінець разом із
     # нею переїхав на інший край. Без цього правило вимикалося, і на вкладках
-    # лишалися дірки (2323, «Світанок»; 23.09.2026). -rotate 90 = за годинником.
-    if ($Rotate -ne 0) {
-        $map = @{
-            90  = @{ Left = "Top";    Right = "Bottom" }
-            180 = @{ Left = "Right";  Right = "Left"   }
-            270 = @{ Left = "Bottom"; Right = "Top"    }
-        }
-        $m = $map[[int]$Rotate]
-        if (-not $m) { return $null }
-        $side = $m[$side]
-    }
+    # лишалися дірки (2323, «Світанок»; 23.09.2026). Див. Get-NsSpineSide.
+    $side = Get-NsSpineSide -PageNo $PageNo -Rotate $Rotate
+    if (-not $side) { return $null }
     @{ Side = $side; CleanMm = $r.CleanMm; HoleMaxMm = $r.HoleMaxMm
        FillHoles = [bool]$r.FillHoles; ZoneMm = $(if ($r.ZoneMm) { [double]$r.ZoneMm } else { 16.0 })
        BigMinMm = $(if ($r.BigMinMm) { [double]$r.BigMinMm } else { 0.0 }) }
