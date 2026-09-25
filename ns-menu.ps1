@@ -170,6 +170,15 @@ try {
                         $n, $u.seq_first, $u.date, $u.pages, $u.status) -ForegroundColor Yellow
         }
 
+        # відскановані, але ще не прийняті (станція 1a): state = scanned. Старі номери без поля state не чіпаємо.
+        $toAccept = @($rows | Where-Object { $_.PSObject.Properties.Name -contains 'state' -and $_.state -eq "scanned" } |
+                              Sort-Object { [int]$_.seq_first })
+        foreach ($u in $toAccept) {
+            $n++
+            $actions["$n"] = @{ kind = "accept"; seq = [int]$u.seq_first }
+            Write-Host ("  [{0}]  Прийняти номер {1}  ({2}, {3} стор.) — підвали й перевірка" -f $n, $u.seq_first, $u.date, $u.pages) -ForegroundColor Yellow
+        }
+
         $n++
         $actions["$n"] = @{ kind = "new" }
         if ($sugg) {
@@ -185,7 +194,7 @@ try {
         $n++; $actions["$n"] = @{ kind = "open" }
         Write-Host ("  [{0}]  Відкрити теку каталогу" -f $n)
 
-        $ready = @($rows | Where-Object { $_.status -eq "scanned" } |
+        $ready = @($rows | Where-Object { $_.status -eq "scanned" -and -not ($_.PSObject.Properties.Name -contains 'state' -and $_.state -in @("scanning", "scanned")) } |
                            Sort-Object { [int]$_.seq_first })
         $n++; $actions["$n"] = @{ kind = "pdf"; ready = $ready }
         if ($ready.Count -gt 0) {
@@ -210,6 +219,7 @@ try {
         Write-Host ""
         switch ($a.kind) {
             "resume" { & "$PSScriptRoot\ns-scan.ps1" -Seq $a.seq }
+            "accept" { & "$PSScriptRoot\ns-accept.ps1" -Seq $a.seq }
             "new"    { Invoke-NsNewIssue -Suggestion $sugg }
             "verify" { & "$PSScriptRoot\ns-verify.ps1" }
             "open"   { Start-Process explorer.exe $script:NS_MASTERS }

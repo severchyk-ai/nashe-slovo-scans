@@ -22,6 +22,7 @@ param(
     [string]$Source = "розшитий річник",
     [string]$Operator = "sever",
     [switch]$NoView,
+    [switch]$NoAccept,           # не запускати приймання (ns-accept) після Q
     [string]$Insert              # сторінки вкладки зі своєю нумерацією: "9-14"
 )
 
@@ -65,9 +66,14 @@ if (-not $man) {
                           -PagesExpected $PagesExpected -Source $Source -Operator $Operator
     $man.scan_date = (Get-Date).ToString("yyyy-MM-dd")
     $man.status = "scanning"
-    Write-NsManifest -IssueDir $issueDir -Manifest $man
-    Set-NsRegistryRow -Manifest $man -Status "scanning"
+    Set-NsIssueState -IssueDir $issueDir -Manifest $man -State "scanning" -Note "заведено"
     Write-Host "Заведено номер $Seq ($Date, № $NoInYear у році)." -ForegroundColor Green
+}
+
+# Номер, що вже мав стан конвеєра (scanned/accepted), продовжують сканувати — стан знову scanning:
+# інакше нічна зміна взяла б неповний номер.
+if ((Get-NsIssueState $man) -in @("scanned", "accepted", "review", "fix", "ready")) {
+    Set-NsIssueState -IssueDir $issueDir -Manifest $man -State "scanning" -Note "продовження сканування"
 }
 
 # --- відновлення: що вже надійно прийнято ----------------------------------
@@ -277,12 +283,12 @@ while ($true) {
 }
 
 # --- завершення ------------------------------------------------------------
-if (-not $NoView) { Set-NsLiveStatus -Status "done" }
 $count = @($man.pages).Count
 
 # Нічого не відскановано — прибрати заготовку, щоб не лишати порожній номер
 # у каталозі. Втрачати нічого: жодного файлу не створено.
 if ($count -eq 0) {
+    if (-not $NoView) { Set-NsLiveStatus -Status "done" }
     Remove-Item -Path $issueDir -Recurse -Force -ErrorAction SilentlyContinue
     $rows = @(Read-NsRegistry | Where-Object { [int]$_.seq_first -ne [int]$man.seq_first })
     Write-NsRegistry -Rows $rows
@@ -291,15 +297,23 @@ if ($count -eq 0) {
     exit 0
 }
 $man.status = if ($count -eq $man.pages_expected) { "scanned" } else { "qc_flagged" }
-Write-NsManifest -IssueDir $issueDir -Manifest $man
-$bytes = (@($man.pages) | Measure-Object -Property bytes -Sum).Sum
-Set-NsRegistryRow -Manifest $man -Status $man.status -Bytes $bytes
+Set-NsIssueState -IssueDir $issueDir -Manifest $man -State "scanned" -Note ("Q: {0} стор. із {1} заявлених" -f $count, $man.pages_expected)
 
 if ($count -gt 0) {
     $sumFile = Join-Path $script:CHECKSUMS "$($man.seq_first).sha256"
     $lines = @(foreach ($p in $man.pages) { "$($p.sha256)  $($p.file)" })
     [IO.File]::WriteAllLines($sumFile, $lines, [Text.UTF8Encoding]::new($false))
 }
+
+# --- приймання (станція 1a): технічна перевірка, підвали всіх сторінок, Enter = прийнято ---
+if (-not $NoAccept) {
+    $acc = @{ Seq = [int]$man.seq_first }
+    if ($NoView) { $acc.NoView = $true }
+    & "$PSScriptRoot\ns-accept.ps1" @acc
+    $man = Read-NsManifest -IssueDir $issueDir       # приймання могло змінити pages_expected, status, state
+    $count = @($man.pages).Count
+}
+if (-not $NoView) { Set-NsLiveStatus -Status "done" }
 
 Write-Host ""
 if ($count -eq $man.pages_expected) {

@@ -983,9 +983,44 @@ function Read-NsRegistry {
 function Write-NsRegistry {
     param($Rows)
     $tmp = "$script:REGISTRY.tmp"
-    $Rows | Sort-Object { [int]$_.seq_first } |
-        Export-Csv -Path $tmp -NoTypeInformation -Encoding UTF8
+    # Однаковий набір колонок у КОЖНОМУ рядку: Export-Csv бере колонки з першого об'єкта, і старі
+    # рядки без `state` (25.09.2026, стан конвеєра) інакше втратили б або перекосили нову колонку.
+    $cols = @("seq_first", "seq_last", "year", "issue_no_in_year", "date", "pages", "source_volume",
+              "scan_date", "operator", "status", "bytes", "notes", "state")
+    @($Rows) | ForEach-Object {
+        $r = $_; $o = [ordered]@{}
+        foreach ($c in $cols) { $o[$c] = if ($r.PSObject.Properties.Name -contains $c) { $r.$c } else { "" } }
+        [pscustomobject]$o
+    } | Sort-Object { [int]$_.seq_first } | Export-Csv -Path $tmp -NoTypeInformation -Encoding UTF8
     Move-Item -Path $tmp -Destination $script:REGISTRY -Force
+}
+
+# ------------------------------------------------ стан номера в конвеєрі (КОНВЕЄР.md)
+# Джерело істини — поле `state` у маніфесті; колонка `state` у реєстрі лише віддзеркалює його.
+# Старі номери (до 25.09.2026) поля не мають: їхній стан порожній і меню їх не чіпає.
+#   scanning -> scanned -> accepted -> ready | review -> fix -> review ... -> done -> backed_up
+$script:NS_STATES = @("scanning", "scanned", "accepted", "review", "fix", "ready", "done", "backed_up")
+
+function Get-NsIssueState {
+    param($Manifest)
+    if ($Manifest -and $Manifest.PSObject.Properties.Name -contains 'state' -and $Manifest.state) { return [string]$Manifest.state }
+    return ""
+}
+
+function Set-NsIssueState {
+    <#  Записати стан номера в маніфест (з історією `state_log`) і віддзеркалити в реєстр. #>
+    param([string]$IssueDir, $Manifest, [string]$State, [string]$Note = "")
+    if ($script:NS_STATES -notcontains $State) { throw "Невідомий стан '$State'. Дозволені: $($script:NS_STATES -join ', ')" }
+    $now = (Get-Date).ToString("s")
+    $Manifest | Add-Member -NotePropertyName state -NotePropertyValue $State -Force
+    $Manifest | Add-Member -NotePropertyName state_at -NotePropertyValue $now -Force
+    $log = @()
+    if ($Manifest.PSObject.Properties.Name -contains 'state_log') { $log = @($Manifest.state_log) }
+    $log += [pscustomobject]@{ state = $State; at = $now; note = $Note }
+    $Manifest | Add-Member -NotePropertyName state_log -NotePropertyValue $log -Force
+    Write-NsManifest -IssueDir $IssueDir -Manifest $Manifest
+    $bytes = if (@($Manifest.pages).Count -gt 0) { [long](@($Manifest.pages) | Measure-Object -Property bytes -Sum).Sum } else { 0 }
+    Set-NsRegistryRow -Manifest $Manifest -Status $Manifest.status -Bytes $bytes
 }
 
 function Set-NsRegistryRow {
@@ -1005,6 +1040,7 @@ function Set-NsRegistryRow {
         status           = $Status
         bytes            = $Bytes
         notes            = ""
+        state            = (Get-NsIssueState $Manifest)
     }
     $rows = @($rows | Where-Object { [int]$_.seq_first -ne [int]$Manifest.seq_first })
     Write-NsRegistry -Rows (@($rows) + $row)
@@ -1040,6 +1076,7 @@ function Sync-NsRegistry {
             status           = $man.status
             bytes            = $bytes
             notes            = ""
+            state            = (Get-NsIssueState $man)
         }
         $old = $before["$($man.seq_first)"]
         if (-not $old) {
