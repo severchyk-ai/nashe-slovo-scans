@@ -255,6 +255,7 @@ foreach ($p in $pages) {
 # 2280/2 «2L0» — 4,1 мм зліва (зникли «2» і «1» в даті), 2280/6 — 2,0 мм
 # (оператор, 28.09.2026). Білий клин там лишається й зливається з рамкою.
 $forcedSides = @{}
+$fitRecs = [ordered]@{}; $wedgeKept = @{}; $wedgeCut = @{}
 $issueDirR = Find-NsIssueDir -Seq $Seq
 $manR = if ($issueDirR) { Read-NsManifest -IssueDir $issueDirR } else { $null }
 if ($manR -and $manR.PSObject.Properties.Name -contains 'page_edge' -and $manR.page_edge) {
@@ -278,7 +279,7 @@ if (-not $NoWedge) {
                 if ($fs -contains "R" -and $wr -gt 0) { $kept += ("п{0:N1}" -f ($wr*25.4/$Dpi)); $wr = 0 }
                 if ($fs -contains "T" -and $wt -gt 0) { $kept += ("в{0:N1}" -f ($wt*25.4/$Dpi)); $wt = 0 }
                 if ($fs -contains "B" -and $wb -gt 0) { $kept += ("н{0:N1}" -f ($wb*25.4/$Dpi)); $wb = 0 }
-                if ($kept.Count -gt 0) { $wedgeLog += ("{0}: клин НЕ знято за page_edge: {1} мм" -f $p.Name, ($kept -join " ")) }
+                if ($kept.Count -gt 0) { $wedgeLog += ("{0}: клин НЕ знято за page_edge: {1} мм" -f $p.Name, ($kept -join " ")); $wedgeKept[$p.Name] = ($kept -join " ") }
             }
             if (($wl + $wr + $wt + $wb) -gt 0 -and ($p.CW - $wl - $wr) -gt 200 -and ($p.CH - $wt - $wb) -gt 200) {
                 $p.CX += $wl; $p.CY += $wt; $p.CW -= ($wl + $wr); $p.CH -= ($wt + $wb)
@@ -362,6 +363,17 @@ if (-not $NoPad) {
             # Симетрія полів (25.09.2026): знімаємо не лише лишок до цілі, а й різницю
             # запасів ліво/право (= різницю полів друку), але не більше, ніж потім
             # поверне дозволене розтягнення FitGrowMaxPct — інакше рамка нерівна (2328/9).
+            # _fit.json (28.09.2026): числа для виміру стандарту рамки — до зведення
+            try {
+                $fitRecs[$p.Name] = [ordered]@{
+                    page = $p.Name; land = [bool]$land; w0 = $p.W; h0 = $p.H
+                    cw_before = $p.CW; ch_before = $p.CH
+                    free_mm = @([math]::Round($p.Free.fLeft, 2), [math]::Round($p.Free.fRight, 2), [math]::Round($p.Free.fTop, 2), [math]::Round($p.Free.fBottom, 2))
+                    target = @([int]$tw, [int]$th)
+                    forced = @(if ($forcedSides.ContainsKey($p.Name)) { $forcedSides[$p.Name] } else { @() })
+                    wedge_kept_mm = $(if ($wedgeKept.ContainsKey($p.Name)) { $wedgeKept[$p.Name] } else { "" })
+                }
+            } catch { }
             $exLR = $p.CW - $tw
             $need = [int]([math]::Abs($p.Free.fLeft - $p.Free.fRight) * $mmPx)
             $floorLR = if ($FitScale) { [int][math]::Ceiling($tw / (1 + $FitGrowMaxPct / 100.0)) } else { $tw }
@@ -371,6 +383,8 @@ if (-not $NoPad) {
             $p.CX += $lr[0]; $p.CW -= ($lr[0] + $lr[1])
             $p.CY += $tb[0]; $p.CH -= ($tb[0] + $tb[1])
             $dw = ($tw - $p.CW) / $mmPx; $dh = ($th - $p.CH) / $mmPx
+            try { if ($fitRecs.Contains($p.Name)) { $fitRecs[$p.Name].cw_after = $p.CW; $fitRecs[$p.Name].ch_after = $p.CH
+                  $fitRecs[$p.Name].cut_lr_px = @($lr[0], $lr[1]); $fitRecs[$p.Name].cut_tb_px = @($tb[0], $tb[1]) } } catch { }
             if ([math]::Abs($dw) -gt 0.5 -or [math]::Abs($dh) -gt 0.5) {
                 Write-Host ("  {0}: не зведено до спільного розміру ({1:+0.0;-0.0} x {2:+0.0;-0.0} мм) — бракує чистого поля" -f $p.Name, -$dw, -$dh) -ForegroundColor Yellow
             }
@@ -454,6 +468,7 @@ foreach ($p in $pages) {
             $dx = ($nw / [double]$p.CW - 1) * 100; $dy = ($nh / [double]$p.CH - 1) * 100
             $okx = ($dx -ge -($FitScaleMaxPct + 0.05)) -and ($dx -le $FitGrowMaxPct + 0.05)
             $oky = ($dy -ge -($FitScaleMaxPct + 0.05)) -and ($dy -le $FitGrowMaxPct + 0.05)
+            try { if ($fitRecs.Contains($p.Name)) { $fitRecs[$p.Name].scale_pct = @([math]::Round($dx, 2), [math]::Round($dy, 2)); $fitRecs[$p.Name].scaled = [bool]($okx -and $oky) } } catch { }
             if ($okx -and $oky -and ($nw -ne $p.CW -or $nh -ne $p.CH)) {
                 $draw += @("-resize", ("{0}x{1}!" -f $nw, $nh))
                 $note2 = "{0} {1:+0.00;-0.00} x {2:+0.00;-0.00} %" -f $(if ($dx -lt 0 -or $dy -lt 0) { "масштаб" } else { "розтягнуто" }), $dx, $dy
@@ -471,6 +486,13 @@ foreach ($p in $pages) {
 }
 
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+
+# _fit.json: посторінкові числа зведення розміру (для виміру стандарту рамки,
+# 28.09.2026). На результат не впливає; збій запису не зупиняє render.
+try {
+    $fitOut = [ordered]@{ seq = $Seq; dpi = $Dpi; frame_px = $fm; grow_max = $FitGrowMaxPct; scale_max = $FitScaleMaxPct; pages = @($fitRecs.Values) }
+    [IO.File]::WriteAllText((Join-Path $render "_fit.json"), ($fitOut | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
+} catch { Write-Host "  (_fit.json не записано: $($_.Exception.Message))" -ForegroundColor DarkGray }
 
 Write-Host ""
 Write-Host ("Готово: {0}  ({1} сторінок, разом {2:N1} МБ)" -f $render, $pages.Count, $total) -ForegroundColor Green
