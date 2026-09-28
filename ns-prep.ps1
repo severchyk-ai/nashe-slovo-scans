@@ -23,6 +23,7 @@ param(
     [switch]$FillHoles,          # заповнювати великі проколи тоном паперу (лише з дозволу оператора)
     [switch]$NoOuterRule,        # зовнішній бік різати як раніше (8 мм), а не лише до паперу (правило 25.09.2026)
     [string]$FillThreadsPages,   # "1,2": заростати й дрібні нитки на цих сторінках (за вказівкою оператора) — пишеться в маніфест
+    [string]$FillAt,             # "1L254 5L254": заростити дірку в цьому місці (сторінка, бік, мм уздовж) — пишеться в маніфест
     [switch]$NoSpineBand         # не обрізати смугу скла на корінці (для заміру ниток у ns-prepare)
 )
 
@@ -99,6 +100,11 @@ if ($FillHoles) {
     $man | Add-Member -NotePropertyName fill_holes -NotePropertyValue $true -Force
     Write-NsManifest -IssueDir $issueDir -Manifest $man
     Write-Host "  заповнення проколів дозволено оператором — записано в маніфест" -ForegroundColor Yellow
+}
+if ($FillAt) {
+    $man | Add-Member -NotePropertyName fill_at -NotePropertyValue $FillAt -Force
+    Write-NsManifest -IssueDir $issueDir -Manifest $man
+    Write-Host "  дірки за вказівкою (fill_at) записано в маніфест: $FillAt" -ForegroundColor Yellow
 }
 if ($FillThreadsPages) {
     $man | Add-Member -NotePropertyName fill_threads_pages -NotePropertyValue $FillThreadsPages -Force
@@ -310,6 +316,38 @@ foreach ($p in ($man.pages | Sort-Object { [int]$_.n })) {
                                  -ReportDir (Join-Path (Split-Path $prep -Parent) "holes") `
                                  -ReportName ("p{0:D2}" -f [int]$p.n)
             if ($nh -gt 0) { $edgeNote = ($edgeNote, ("залатано проколів: {0} ({1})" -f $nh, $holeRule.Side) | Where-Object { $_ }) -join "; " }
+        }
+        # fill_at у маніфесті ("1L254 2R254 5L254": сторінка, бік, мм уздовж краю) —
+        # оператор ВКАЗАВ дірку, яку автоматика лишає: не на папері (блакитна плашка
+        # 2280/1, межа паперу й растру фото 2280/5) або біля смуги краю (2280/2).
+        # ns-holeat.py сам знаходить у тому місці темну безбарвну круглу пляму й
+        # заростає її тоном тла; не знайшов — не чіпає й каже (28.09.2026).
+        if ($man.PSObject.Properties.Name -contains 'fill_at' -and $man.fill_at) {
+            foreach ($tok in ($man.fill_at -split '[,\s]+')) {
+                if ($tok -notmatch '^(\d+)([LRTBlrtb])([\d.]+)$' -or [int]$Matches[1] -ne [int]$p.n) { continue }
+                $fs = $Matches[2].ToUpper(); $fAlong = $Matches[3]
+                $fSide = @{ L = "Left"; R = "Right"; T = "Top"; B = "Bottom" }[$fs]
+                $fSkip = if ($edgeMap.ContainsKey([int]$p.n) -and $edgeMap[[int]$p.n].ContainsKey($fSide)) { $edgeMap[[int]$p.n][$fSide] } else { 0 }
+                $hd = Join-Path (Split-Path $prep -Parent) "holes"
+                New-Item -ItemType Directory -Path $hd -Force | Out-Null
+                $fwin = Join-Path $env:TEMP ("ns_holeat_{0}_{1}_{2}.png" -f $Seq, [int]$p.n, $fs)
+                $fsheet = Join-Path $hd ("p{0:D2}_at_{1}{2}.png" -f [int]$p.n, $fs, $fAlong)
+                $fArgs = @($dst, $fs, $fAlong, $fwin, "--skip", $fSkip, "--sheet", $fsheet,
+                           "--dump", (Join-Path $hd ("p{0:D2}_at_{1}{2}_in.png" -f [int]$p.n, $fs, $fAlong)))
+                if ($fillColor -match '^rgb\(') { $fArgs += @("--paper", $fillColor) }
+                $fo = & python (Join-Path $PSScriptRoot "ns-holeat.py") @fArgs 2>&1
+                [IO.File]::WriteAllLines((Join-Path $hd ("p{0:D2}_at_{1}{2}_log.txt" -f [int]$p.n, $fs, $fAlong)), [string[]]@($fo), (New-Object Text.UTF8Encoding $true))
+                $offL = @($fo | Where-Object { "$_" -match '^OFFSET (\d+) (\d+)$' })
+                if ($offL.Count -gt 0 -and (Test-Path $fwin) -and "$($offL[-1])" -match '^OFFSET (\d+) (\d+)$') {
+                    & magick $dst $fwin -geometry ("+{0}+{1}" -f $Matches[1], $Matches[2]) -composite -compress LZW "$dst.at.tif" 2>$null
+                    if (Test-Path "$dst.at.tif") { Move-Item "$dst.at.tif" $dst -Force }
+                    $edgeNote = ($edgeNote, ("зарощено за вказівкою: {0}{1}" -f $fs, $fAlong) | Where-Object { $_ }) -join "; "
+                } else {
+                    $why = @($fo | Where-Object { "$_" -match 'ДІРКУ НЕ ЗНАЙДЕНО|лишено:|межа тонів' }) -join " "
+                    $edgeNote = ($edgeNote, ("НЕ зарощено {0}{1}: {2}" -f $fs, $fAlong, $why) | Where-Object { $_ }) -join "; "
+                }
+                Remove-Item $fwin -Force -ErrorAction SilentlyContinue
+            }
         }
         # Замальовування тонкої лінії краю (Repair-NsEdgeLine) ВИМКНЕНО
         # 23.09.2026: воно лишало сіру смугу згори кожної сторінки (латка

@@ -249,12 +249,37 @@ foreach ($p in $pages) {
 # НАЙБІЛЬШУ глибину (ns-wedge.py міряє її в 25 місцях уздовж краю) — край
 # стає прямим. Знята смужка — порожнє поле, тож і запас чистого поля до
 # друку (fT..fR) зменшується на неї, щоб зведення розміру не зайшло в друк.
+# Бік із вказівкою оператора (page_edge у маніфесті) клин НЕ чіпає: вказівка діє
+# на всьому шляху, не лише в prep. Клин знімається на НАЙБІЛЬШУ глибину, тож
+# там, де аркуш лежав упритул до межі сканера, він різав папір із друком:
+# 2280/2 «2L0» — 4,1 мм зліва (зникли «2» і «1» в даті), 2280/6 — 2,0 мм
+# (оператор, 28.09.2026). Білий клин там лишається й зливається з рамкою.
+$forcedSides = @{}
+$issueDirR = Find-NsIssueDir -Seq $Seq
+$manR = if ($issueDirR) { Read-NsManifest -IssueDir $issueDirR } else { $null }
+if ($manR -and $manR.PSObject.Properties.Name -contains 'page_edge' -and $manR.page_edge) {
+    foreach ($tok in ($manR.page_edge -split '[,\s]+')) {
+        if ($tok -match '^(\d+)([LRTBlrtb])([\d.]+)$') {
+            $key = "p{0:D2}" -f [int]$Matches[1]
+            if (-not $forcedSides.ContainsKey($key)) { $forcedSides[$key] = @() }
+            $forcedSides[$key] += $Matches[2].ToUpper()
+        }
+    }
+}
 $wedgeLog = @()
 if (-not $NoWedge) {
     foreach ($p in $pages) {
         $wo = & python "$PSScriptRoot\ns-wedge.py" $p.Path $p.CX $p.CY $p.CW $p.CH 2>$null
         if ("$wo" -match '^(\d+) (\d+) (\d+) (\d+)$') {
             $wl = [int]$Matches[1]; $wr = [int]$Matches[2]; $wt = [int]$Matches[3]; $wb = [int]$Matches[4]
+            if ($forcedSides.ContainsKey($p.Name)) {
+                $fs = $forcedSides[$p.Name]; $kept = @()
+                if ($fs -contains "L" -and $wl -gt 0) { $kept += ("л{0:N1}" -f ($wl*25.4/$Dpi)); $wl = 0 }
+                if ($fs -contains "R" -and $wr -gt 0) { $kept += ("п{0:N1}" -f ($wr*25.4/$Dpi)); $wr = 0 }
+                if ($fs -contains "T" -and $wt -gt 0) { $kept += ("в{0:N1}" -f ($wt*25.4/$Dpi)); $wt = 0 }
+                if ($fs -contains "B" -and $wb -gt 0) { $kept += ("н{0:N1}" -f ($wb*25.4/$Dpi)); $wb = 0 }
+                if ($kept.Count -gt 0) { $wedgeLog += ("{0}: клин НЕ знято за page_edge: {1} мм" -f $p.Name, ($kept -join " ")) }
+            }
             if (($wl + $wr + $wt + $wb) -gt 0 -and ($p.CW - $wl - $wr) -gt 200 -and ($p.CH - $wt - $wb) -gt 200) {
                 $p.CX += $wl; $p.CY += $wt; $p.CW -= ($wl + $wr); $p.CH -= ($wt + $wb)
                 if ($edgeMm.ContainsKey($p.Name)) {
@@ -266,7 +291,7 @@ if (-not $NoWedge) {
             }
         }
     }
-    foreach ($ln in $wedgeLog) { Write-Host "  $ln" -ForegroundColor DarkGray }
+    foreach ($ln in $wedgeLog) { Write-Host "  $ln" -ForegroundColor $(if ($ln -match 'НЕ знято') { "Yellow" } else { "DarkGray" }) }
 }
 
 # РАМКА: FrameMm з усіх боків навколо спільного розміру групи (див. нижче).
