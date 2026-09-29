@@ -121,12 +121,17 @@ def main():
     ap.add_argument("--quiet-grid", action="store_true")
     ap.add_argument("--jpegtest", action="store_true", help="prep з балансом render -> PNG і JPEG: що додає JPEG")
     ap.add_argument("--quality", type=int, default=55)
+    ap.add_argument("--render-dir", default="", help="render з іншої теки (клон із варіантом JPEG); майстер і prep — з номера")
+    ap.add_argument("--only-render", action="store_true", help="міряти лише render (швидко)")
     a = ap.parse_args()
     gx, gy = [int(v) for v in a.grid.split("x")]
     m = glob.glob(r"C:\NS_MASTERS\*\%s_*\%s_*_p%02d.tif" % (a.seq, a.seq, a.page))
     stages = [("майстер", m[0] if m else None, 400),
               ("prep", r"C:\NS_WORK\%s\prep\p%02d.tif" % (a.seq, a.page), 400),
-              ("render", r"C:\NS_WORK\%s\render\p%02d.jpg" % (a.seq, a.page), 300)]
+              ("render", os.path.join(a.render_dir, "p%02d.jpg" % a.page) if a.render_dir
+               else r"C:\NS_WORK\%s\render\p%02d.jpg" % (a.seq, a.page), 300)]
+    if a.only_render:
+        stages = stages[2:]
     print("%s стор. %d" % (a.seq, a.page))
     maps = {}
     for name, path, dpi in stages:
@@ -137,6 +142,9 @@ def main():
         res, box = grid_stats(small, name, gx, gy)
         maps[name] = res
         med = np.nanmedian(res.reshape(-1, 4), axis=0)
+        print("  %-8s розмах візерунка a* %.2f, b* %.2f (клітин %d)" % (
+            name, np.nanmax(res[..., 0]) - np.nanmin(res[..., 0]), np.nanmax(res[..., 1]) - np.nanmin(res[..., 1]),
+            int((~np.isnan(res[..., 0])).sum())))
         if not a.quiet_grid:
             print("  %-8s папір: L %.1f  a* %+.2f  b* %+.2f  B-R %+.1f  (медіана клітин)" % (name, med[3], med[0], med[1], med[2]))
             for lbl, k in (("a*", 0), ("b*", 1)):

@@ -18,6 +18,7 @@ param(
     [Parameter(Mandatory = $true)][int]$Seq,
     [int]$Dpi = 300,
     [int]$Quality = 55,
+    [string]$Sampling = "",  # субдискретизація кольору JPEG, напр. "1x1" (4:4:4); порожньо — як завжди (magick: 2x2 при q < 90). Лише для проб (29.09.2026)
     [int]$Saturation = 125,
     [int]$PaperTarget = 244,
     [switch]$Force,
@@ -32,7 +33,9 @@ param(
     [switch]$NoFitScale,          # вимкнути стиснення ширших сторінок до спільного розміру
     [double]$FitScaleMaxPct = 4.0, # межа стиснення, % (погоджено оператором 21.09.2026)
     [double]$FitGrowMaxPct = 1.5,  # межа розтягнення вужчої за ціль сторінки, % (24.09.2026: рамка мусить бути однаковою з усіх боків)
-    [switch]$NoWedge              # не знімати білі клини після випрямлення (стара поведінка)
+    [switch]$NoWedge,             # не знімати білі клини після випрямлення (стара поведінка)
+    [switch]$PaperPad,            # БЕЗ МАСШТАБУ: спільний розмір і центр — доповненням газетним папером (ns-paperpad.py; оператор 29.09.2026)
+    [switch]$CenterV              # з -PaperPad: центрувати друк і по висоті (за умовчанням поля верх/низ міняються порівну)
 )
 # Стиснення до медіани номера — стандарт з 21.09.2026 (оператор: «виглядає
 # добре» на 2294/2308: рамка 6,7-7,1 мм, 2294/1 стиснуто на 3,75 % по ширині).
@@ -268,7 +271,8 @@ if ($manR -and $manR.PSObject.Properties.Name -contains 'page_edge' -and $manR.p
     }
 }
 $wedgeLog = @()
-if (-not $NoWedge) {
+# -PaperPad: клин не зрізається (різав би справжній папір на решті краю), а заливається папером у ns-paperpad.py
+if (-not $NoWedge -and -not $PaperPad) {
     foreach ($p in $pages) {
         $wo = & python "$PSScriptRoot\ns-wedge.py" $p.Path $p.CX $p.CY $p.CW $p.CH 2>$null
         if ("$wo" -match '^(\d+) (\d+) (\d+) (\d+)$') {
@@ -326,7 +330,7 @@ function Get-NsSpan([int]$Extra, [double]$FreeA, [double]$FreeB, [int]$Dpi, [swi
     return @($a, $b)
 }
 $groupSize = @{}
-if (-not $NoPad) {
+if (-not $NoPad -and -not $PaperPad) {
     $mmPx = $Dpi / 25.4
     foreach ($land in @($false, $true)) {
         $items = @($pages | Where-Object { ($_.CW -gt $_.CH) -eq $land })
@@ -421,7 +425,57 @@ function Get-NsEdgePaperTone {
     return (@($vals | Sort-Object))[[int]($vals.Count / 2)]
 }
 
+$jpgOpt = @(); if ($Sampling) { $jpgOpt = @("-sampling-factor", $Sampling) }
 $total = 0
+if ($PaperPad) {
+    # Масштаб 0: ns-paperpad.py дорізає бруд, центрує друк і доповнює папером до спільного розміру; тут лише JPEG.
+    $ppJob = [ordered]@{ dpi = $Dpi; frame_px = $fm; frame_tone = $FrameTone; center_v = [bool]$CenterV; seed = $Seq
+                         report = (Join-Path $render "_paperpad.json"); pages = @() }
+    # Бік page_edge, який записав ns-prepare із заміру ниток (той самий знак у prepare.json, edge_source
+    # ns-spinescan), — не вказівка оператора: бруд за ним дорізається (2278/4 справа — нитки лишились).
+    # Решта page_edge — слово оператора, там ns-paperpad не ріже нічого понад prep.
+    $measuredTok = @{}
+    $pjf = Join-Path (Join-Path $script:NS_WORK "$Seq") "prepare.json"
+    if (Test-Path $pjf) {
+        try { $pj = Get-Content $pjf -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $pj = $null }
+        if ($pj -and $pj.edge_source -eq "ns-spinescan" -and $pj.spine -and $pj.spine.edge) {
+            foreach ($tk in ($pj.spine.edge -split '[,\s]+')) { if ($tk) { $measuredTok[$tk.ToUpper()] = $true } }
+        }
+    }
+    $opSides = @{}
+    if ($manR -and $manR.PSObject.Properties.Name -contains 'page_edge' -and $manR.page_edge) {
+        foreach ($tok in ($manR.page_edge -split '[,\s]+')) {
+            if ($tok -match '^(\d+)([LRTBlrtb])([\d.]+)$' -and -not $measuredTok.ContainsKey($tok.ToUpper())) {
+                $key = "p{0:D2}" -f [int]$Matches[1]
+                if (-not $opSides.ContainsKey($key)) { $opSides[$key] = @() }
+                $opSides[$key] += $Matches[2].ToUpper()
+            }
+        }
+    }
+    # fill_edge (ns-prep -FillEdge): бруд на цих краях не різати, а залити тлом до рамки, навіть на боці з page_edge
+    $fillSides = @{}
+    if ($manR -and $manR.PSObject.Properties.Name -contains 'fill_edge' -and $manR.fill_edge) {
+        foreach ($tok in ($manR.fill_edge -split '[,\s]+')) {
+            if ($tok -match '^(\d+)([LRTBlrtb])$') {
+                $key = "p{0:D2}" -f [int]$Matches[1]
+                if (-not $fillSides.ContainsKey($key)) { $fillSides[$key] = @() }
+                $fillSides[$key] += $Matches[2].ToUpper()
+            }
+        }
+        Write-Host "  fill_edge: $($manR.fill_edge)" -ForegroundColor Yellow
+    }
+    foreach ($p in $pages) {
+        $ppJob.pages += [ordered]@{ name = $p.Name; png = $p.Path; out = (Join-Path $tmp ($p.Name + "_pp.png"))
+                                    crop = @($p.CX, $p.CY, $p.CW, $p.CH)
+                                    forced = @(if ($opSides.ContainsKey($p.Name)) { $opSides[$p.Name] } else { @() })
+                                    fill = @(if ($fillSides.ContainsKey($p.Name)) { $fillSides[$p.Name] } else { @() }) }
+    }
+    $jobFile = Join-Path $tmp "_paperpad_job.json"
+    [IO.File]::WriteAllText($jobFile, ($ppJob | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
+    & python "$PSScriptRoot\ns-paperpad.py" $jobFile | ForEach-Object { Write-Host "  $_" }
+    if ($LASTEXITCODE -ne 0) { Write-Host "  ЗБІЙ ns-paperpad.py (код $LASTEXITCODE)" -ForegroundColor Red; exit 1 }
+    foreach ($p in $pages) { $p.Path = Join-Path $tmp ($p.Name + "_pp.png"); $p.CX = 0; $p.CY = 0 }
+}
 foreach ($p in $pages) {
     $jpg = Join-Path $render ($p.Name + ".jpg")
     # -units PixelsPerInch обов'язковий. Без нього ImageMagick пише щільність
@@ -449,8 +503,11 @@ foreach ($p in $pages) {
         $pageFill = "rgb($pt,$pt,$pt)"
         if ($draw.Count -gt 0) { $draw = @("-fill", $pageFill, "-stroke", "none") + $draw }
     }
-    if ($NoPad) {
-        & magick $p.Path @draw @dens -quality $Quality $jpg 2>$null | Out-Null
+    if ($PaperPad) {
+        & magick $p.Path @dens -quality $Quality @jpgOpt $jpg 2>$null | Out-Null
+        $note = "без масштабу, доповнено папером"
+    } elseif ($NoPad) {
+        & magick $p.Path @draw @dens -quality $Quality @jpgOpt $jpg 2>$null | Out-Null
         $note = "{0}x{1}" -f $p.W, $p.H
     } else {
         $gs = $groupSize[($p.CW -gt $p.CH)]; $tw = $gs[0] + 2 * $fm; $th = $gs[1] + 2 * $fm
@@ -476,7 +533,7 @@ foreach ($p in $pages) {
             }
         }
         & magick $p.Path @draw -gravity center -background $frameColor -extent "${tw}x${th}" `
-                 @dens -quality $Quality $jpg 2>$null | Out-Null
+                 @dens -quality $Quality @jpgOpt $jpg 2>$null | Out-Null
         $note = "{0}x{1} -> {2}x{3} -> {4}x{5}" -f $p.W, $p.H, $p.CW, $p.CH, $tw, $th
     }
     if (-not (Test-Path $jpg)) { Write-Host "  ЗБІЙ на $($p.Name)" -ForegroundColor Red; exit 1 }
@@ -489,10 +546,10 @@ Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
 # _fit.json: посторінкові числа зведення розміру (для виміру стандарту рамки,
 # 28.09.2026). На результат не впливає; збій запису не зупиняє render.
-try {
+if (-not $PaperPad) { try {
     $fitOut = [ordered]@{ seq = $Seq; dpi = $Dpi; frame_px = $fm; grow_max = $FitGrowMaxPct; scale_max = $FitScaleMaxPct; pages = @($fitRecs.Values) }
     [IO.File]::WriteAllText((Join-Path $render "_fit.json"), ($fitOut | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
-} catch { Write-Host "  (_fit.json не записано: $($_.Exception.Message))" -ForegroundColor DarkGray }
+} catch { Write-Host "  (_fit.json не записано: $($_.Exception.Message))" -ForegroundColor DarkGray } }
 
 Write-Host ""
 Write-Host ("Готово: {0}  ({1} сторінок, разом {2:N1} МБ)" -f $render, $pages.Count, $total) -ForegroundColor Green

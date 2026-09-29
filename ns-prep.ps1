@@ -20,6 +20,7 @@ param(
     [double]$BandMaxMm = 8.0,    # глибше цього обрізка країв не робиться взагалі
     [string]$RotatePages,        # ручний поворот: "11:90,13:270" — записується в маніфест
     [string]$EdgeExtra,          # примусове вичищення: "1L3 5L3 8R3" — сторінка, край, мм
+    [string]$FillEdge,           # "1L 6L 7R": бруд на цих краях НЕ різати, а залити тлом до рамки (ns-render -PaperPad); "-" — прибрати
     [switch]$FillHoles,          # заповнювати великі проколи тоном паперу (лише з дозволу оператора)
     [switch]$NoOuterRule,        # зовнішній бік різати як раніше (8 мм), а не лише до паперу (правило 25.09.2026)
     [string]$FillThreadsPages,   # "1,2": заростати й дрібні нитки на цих сторінках (за вказівкою оператора) — пишеться в маніфест
@@ -94,6 +95,19 @@ if ($edgeSpec) {
     } else {
         Write-Host "  примусове вичищення з маніфеста: $edgeSpec" -ForegroundColor Yellow
     }
+}
+
+# fill_edge (29.09.2026, оператор про 2280: «смужку скла не різати, заповнити газетним білим до
+# рамки»; дірки на синій плашці — синім): поле маніфесту для ns-render -PaperPad. prep його не читає.
+if ($FillEdge) {
+    if ($FillEdge -eq "-") { $man.PSObject.Properties.Remove('fill_edge') }
+    else {
+        $bad = @($FillEdge -split '[,\s]+' | Where-Object { $_ -and $_ -notmatch '^\d+[LRTBlrtb]$' })
+        if ($bad.Count) { Write-Host "  -FillEdge: не зрозумів $($bad -join ', ') (треба 1L 6L 7R)" -ForegroundColor Red; exit 1 }
+        $man | Add-Member -NotePropertyName fill_edge -NotePropertyValue $FillEdge.ToUpper() -Force
+    }
+    Write-NsManifest -IssueDir $issueDir -Manifest $man
+    Write-Host "  fill_edge записано в маніфест: $FillEdge" -ForegroundColor Yellow
 }
 
 if ($FillHoles) {

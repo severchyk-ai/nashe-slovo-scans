@@ -79,7 +79,7 @@ def print_start(a, thr, step):
     frac = np.array([d[:, i * step:(i + 1) * step].mean() for i in range(nb)])
     block = -1
     for i in range(nb - 2):
-        if frac[i] >= 0.03 and frac[i + 1] >= 0.03 and frac[i + 2] >= 0.03:
+        if (frac[i] >= 0.03 and frac[i + 1] >= 0.03 and frac[i + 2] >= 0.03) or frac[i] >= 0.05:  # або лінія: 9278/4 (29.09) — рамка колонки 51 %, 2296/8 — тонка лінія 8,8 %, шар 0,5 мм; три шари поспіль ловили її чи ні залежно від сітки
             block = i
             break
     seg = np.array_split(np.arange(d.shape[0]), 40)
