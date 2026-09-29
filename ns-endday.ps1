@@ -173,6 +173,7 @@ if ($NoBackup) {
         $bp = @{ Dest = $r; Quick = $true; Jobs = ($d.Jobs -join ",") }
         if ($d.Years.Count) { $bp.Years = ($d.Years -join ",") }
         if ($d.YbJ.Count) { $bp.JobYears = (($d.YbJ.Keys | ForEach-Object { "{0}={1}" -f $_, ($d.YbJ[$_] -join ",") }) -join ";") }
+        if ($d.Scope.PSObject.Properties.Name -contains 'no_removed' -and $d.Scope.no_removed) { $bp.NoRemoved = $true }   # removed береже інший диск
         if ($DryRun) {
             $bp.DryRun = $true; $bp.Remove("Quick")
             $rc = Invoke-NsScript -Path (Join-Path $PSScriptRoot "ns-backup.ps1") -Params $bp

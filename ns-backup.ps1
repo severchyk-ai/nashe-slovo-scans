@@ -16,14 +16,18 @@
 #   archive   NS_ARCHIVE_PROJECT  хронологія, план, зразки, розмови
 #   naps2     NAPS2           profiles.xml, config.xml (профіль сканера)
 # -Years обмежує masters і pdf вказаними роками; _catalog (реєстр, суми, відкладені кадри) копіюється ЗАВЖДИ ЦІЛИМ.
+# Відкладені й замінені майстри (_catalog\removed) — окрема частина «removed» одразу після masters: не влазять —
+#   пропускаються з червоним рядком (код 3), сторінки від цього не чекають. -NoRemoved — не копіювати їх на цей диск
+#   (коли їх береже інший; пишеться в _scope.json як "no_removed": true). Наявне в копії не видаляється.
 # Диск під частину проєкту (напр. 2002 рік) веде файл <Dest>\NS_BACKUP\_scope.json — його пише цей скрипт
 # за явних -Years/-Jobs, і «Завершити день» (ns-endday) береже такий диск саме в цих межах.
 #
 # Місце перевіряється ДО копіювання, по частинах (порядок: masters, naps2, scans, archive, pdf):
-#   - МАЙСТРИ: якщо не влізають цілком — нічого з них не копіюється, червоний рядок, код 1. Мовчки не пропускаються ніколи.
+#   - МАЙСТРИ (сторінки, маніфести, каталог без removed): якщо не влізають цілком — нічого з них не копіюється, червоний рядок, код 1. Мовчки не пропускаються ніколи.
 #   - PDF (відтворювані): копіюються по одному, скільки влізе; решта — червоний рядок «ПРОПУЩЕНО», код 3.
 #     Кожен PDF пишеться в <ім'я>.part і лише після перевірки розміру перейменовується — обірваних файлів на диску не лишається.
 #   - решта частин (scans, archive, naps2): не влізає — пропускається з червоним рядком, код 3.
+#   Дописуване рахується по файлах: новий — повний розмір, заміна — лише приріст (заміна меншим — 0).
 #   Запас: 2 % від дописуваного + 1 МБ (не більше 32 МБ) на частину; для PDF — 4 МБ.
 # Наприкінці — «місця на диску вистачить ще на N PDF».
 #
@@ -39,7 +43,7 @@
 # але щось (PDF та ін.) пропущено за браком місця.
 
 param([Parameter(Mandatory = $true)][string]$Dest,
-      [switch]$VerifyOnly, [switch]$Quick, [switch]$DryRun,
+      [switch]$VerifyOnly, [switch]$Quick, [switch]$DryRun, [switch]$NoRemoved,
       [string]$Years = "", [string]$Jobs = "all", [string]$JobYears = "")
 
 . "$PSScriptRoot\ns-lib.ps1"
@@ -60,16 +64,21 @@ $jobSet = if ($Jobs -eq "all") { @("masters", "pdf", "scans", "archive", "naps2"
 $bad0 = @($jobSet | Where-Object { @("masters", "pdf", "scans", "archive", "naps2") -notcontains $_ })
 if ($bad0.Count) { Write-Host "Невідома частина в -Jobs: $($bad0 -join ', ')" -ForegroundColor Red; exit 1 }
 
-# Перелік копіювань: (частина, джерело, призначення, чи звичайне /E, чи лише *.xml)
+# Перелік копіювань: (частина, джерело, призначення, чи звичайне /E, чи лише *.xml; тека-виняток /XD)
 $copy = @()
-function Add-Copy { param([string]$Job, [string]$Src, [string]$Dst, [string]$Kind = "tree") $script:copy += @{ job = $Job; src = $Src; dst = $Dst; kind = $Kind } }
+function Add-Copy { param([string]$Job, [string]$Src, [string]$Dst, [string]$Kind = "tree", [string]$Exclude = "") $script:copy += @{ job = $Job; src = $Src; dst = $Dst; kind = $Kind; exclude = $Exclude } }
+# _catalog\removed (відкладені й замінені майстри — старі версії, НЕ сторінки) — окрема частина «removed»:
+# сторінки не мусять чекати на неї. 28.09: 4 перезняті стор. 2280 не лягли на D:, бо разом із ними мали лягти
+# 207 МБ їхніх старих версій у removed, а вільно було 30 МБ (сама заміна сторінок звільняла 2,3 МБ).
+$removedSrc = Join-Path $script:NS_MASTERS "_catalog\removed"
 foreach ($k in $jobSet) {
     switch ($k) {
         "masters" {
             if ($mYears.Count) {
-                Add-Copy "masters" (Join-Path $script:NS_MASTERS "_catalog") (Join-Path $root "NS_MASTERS\_catalog")
+                Add-Copy "masters" (Join-Path $script:NS_MASTERS "_catalog") (Join-Path $root "NS_MASTERS\_catalog") -Exclude $removedSrc
                 foreach ($y in $mYears) { Add-Copy "masters" (Join-Path $script:NS_MASTERS $y) (Join-Path $root "NS_MASTERS\$y") }
-            } else { Add-Copy "masters" $script:NS_MASTERS (Join-Path $root "NS_MASTERS") }
+            } else { Add-Copy "masters" $script:NS_MASTERS (Join-Path $root "NS_MASTERS") -Exclude $removedSrc }
+            if (-not $NoRemoved) { Add-Copy "removed" $removedSrc (Join-Path $root "NS_MASTERS\_catalog\removed") }
         }
         "pdf" {
             if ($pYears.Count) { foreach ($y in $pYears) { Add-Copy "pdf" (Join-Path $script:NS_PDF $y) (Join-Path $root "NS_PDF\$y") } }
@@ -81,10 +90,28 @@ foreach ($k in $jobSet) {
     }
 }
 
-function Get-DirBytes { param([string]$P) if (Test-Path $P) { [long](Get-ChildItem $P -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum } else { 0L } }
+function Get-TreeDelta {
+    <#  Скільки байтів допише robocopy: по файлах, як він сам вирішує (інший розмір або час > 2 с — /FFT).
+        Новий файл — його розмір; заміна — лише приріст (robocopy пише поверх старого, без тимчасової копії),
+        зменшення не віднімається (запас). Раніше бралося «розмір теки мінус розмір копії» — і заміна, і
+        перенесення старої версії в removed зливалися в одне число.  #>
+    param($Job)
+    $sum = 0L
+    $files = if ($Job.kind -eq "xml") { @(Get-ChildItem $Job.src -File -Filter *.xml -Force -ErrorAction SilentlyContinue) }
+             else { @(Get-ChildItem $Job.src -Recurse -File -Force -ErrorAction SilentlyContinue) }
+    foreach ($f in $files) {
+        if ($Job.exclude -and $f.FullName.StartsWith($Job.exclude + '\', [StringComparison]::OrdinalIgnoreCase)) { continue }
+        $df = Join-Path $Job.dst $f.FullName.Substring($Job.src.Length).TrimStart('\')
+        $d = Get-Item -LiteralPath $df -Force -ErrorAction SilentlyContinue
+        if (-not $d) { $sum += $f.Length; continue }
+        if ($d.Length -eq $f.Length -and [math]::Abs(($d.LastWriteTimeUtc - $f.LastWriteTimeUtc).TotalSeconds) -le 2) { continue }
+        $sum += [math]::Max(0L, $f.Length - $d.Length)
+    }
+    return [long]$sum
+}
 function Get-Free { if ($env:NS_TEST_FREE) { return [long]$env:NS_TEST_FREE }   # лише для проб: удаваний вільний обсяг
     [long](Get-PSDrive ((Get-Item $Dest).PSDrive.Name)).Free }
-function Format-Gb { param([long]$B) "{0:N2} ГБ" -f ($B / 1GB) }
+function Format-Gb { param([long]$B) if ($B -lt 1GB) { "{0:N1} МБ" -f ($B / 1MB) } else { "{0:N2} ГБ" -f ($B / 1GB) } }
 
 $MARGIN = 32MB
 function Test-Fits {
@@ -116,20 +143,19 @@ function Get-PdfTodo {
 
 if (-not $VerifyOnly) {
     $free = Get-Free
-    $prio = @{ masters = 1; naps2 = 2; scans = 3; archive = 4; pdf = 5 }
+    $prio = @{ masters = 1; removed = 2; naps2 = 3; scans = 4; archive = 5; pdf = 6 }
     foreach ($j in $copy) {
-        if (-not (Test-Path $j.src)) { $j.need = 0L; $j.already = 0L; $j.delta = 0L; continue }
+        if (-not (Test-Path $j.src)) { $j.delta = 0L; continue }
         if ($j.job -eq "pdf") {
             $j.todo = @(Get-PdfTodo $j)
             $j.delta = [long](($j.todo | Where-Object { -not $_.Exists } | Measure-Object Length -Sum).Sum) +
                        [long](($j.todo | Where-Object { $_.Exists } | Measure-Object Length -Sum).Sum)   # перезапис: у гіршому разі стара копія ще на місці
         } else {
-            $j.need = Get-DirBytes $j.src; $j.already = Get-DirBytes $j.dst
-            $j.delta = [math]::Max(0L, $j.need - $j.already)
+            $j.delta = Get-TreeDelta $j
         }
     }
     Write-Host ("Вільно на {0}: {1}{2}" -f $Dest, (Format-Gb $free), $(if ($mYears.Count -or $pYears.Count) { "  (майстри: $(if ($mYears.Count) { $mYears -join ', ' } else { 'усі' }); PDF: $(if ($pYears.Count) { $pYears -join ', ' } else { 'усі' }))" } else { "" }))
-    foreach ($jn in ($jobSet | Sort-Object { $prio[$_] })) {
+    foreach ($jn in (@($copy | ForEach-Object { $_.job } | Select-Object -Unique) | Sort-Object { $prio[$_] })) {
         $d = [long](($copy | Where-Object { $_.job -eq $jn } | ForEach-Object { $_.delta } | Measure-Object -Sum).Sum)
         Write-Host ("  {0,-8} треба дописати {1}" -f $jn, (Format-Gb $d))
     }
@@ -182,6 +208,7 @@ if (-not $VerifyOnly) {
         } else {
             if (-not (Test-Fits $j.delta $free)) {
                 Write-Host ("  {0} ПРОПУЩЕНО за браком місця: треба {1}, вільно {2}" -f $j.job, (Format-Gb $j.delta), (Format-Gb $free)) -ForegroundColor Red
+                if ($j.job -eq "removed") { Write-Host "    (це старі версії замінених і відкладені кадри, не сторінки; якщо їх береже інший диск — цьому -NoRemoved)" -ForegroundColor DarkGray }
                 $skipped += $j.job
                 continue
             }
@@ -189,6 +216,7 @@ if (-not $VerifyOnly) {
         if ($DryRun) { Write-Host "  (пробний прогін) копіював би $($j.src) -> $($j.dst)"; continue }
         Write-Host "  копіюю $($j.src) -> $($j.dst)"
         $rcArgs = @($j.src, $j.dst, "/E", "/COPY:DAT", "/DCOPY:T", "/FFT", "/R:2", "/W:2", "/MT:8", "/NFL", "/NDL", "/NJH", "/NP")  # /FFT: FAT-диск округлює час до 2 с — без цього кожен запуск перекопіював би все
+        if ($j.exclude) { $rcArgs += @("/XD", $j.exclude) }
         if ($j.kind -eq "xml") { $rcArgs = @($j.src, $j.dst, "*.xml", "/COPY:DAT", "/R:2", "/W:2", "/NFL", "/NDL", "/NJH", "/NP") }
         & robocopy @rcArgs | Out-Null
         if ($LASTEXITCODE -ge 8) { Write-Host "  ЗБІЙ robocopy (код $LASTEXITCODE) на $($j.src)" -ForegroundColor Red; exit 1 }
@@ -210,6 +238,7 @@ if (-not $VerifyOnly) {
     }
     if (($Years -or $Jobs -ne "all" -or $JobYears) -and -not $failNoFit) {
         $scope = [ordered]@{ years = @($yearList | ForEach-Object { [int]$_ }); jobs = @($jobSet) }
+        if ($NoRemoved) { $scope.no_removed = $true }
         if ($jobYearMap.Count) { $yb = [ordered]@{}; foreach ($k in $jobYearMap.Keys) { $yb[$k] = @($jobYearMap[$k] | ForEach-Object { [int]$_ }) }; $scope.years_by_job = $yb }
         $scope.written = (Get-Date).ToString("s")
         [IO.File]::WriteAllText((Join-Path $root "_scope.json"), ($scope | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
