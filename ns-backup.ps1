@@ -93,24 +93,38 @@ foreach ($k in $jobSet) {
 function Get-TreeDelta {
     <#  Скільки байтів допише robocopy: по файлах, як він сам вирішує (інший розмір або час > 2 с — /FFT).
         Новий файл — його розмір; заміна — лише приріст (robocopy пише поверх старого, без тимчасової копії),
-        зменшення не віднімається (запас). Раніше бралося «розмір теки мінус розмір копії» — і заміна, і
+        зменшення не віднімається (запас). Кожен файл і нова тека — цілими кластерами: 29.09 на D: (exFAT, кластер
+        128 КБ) «0,2 МБ» git-об'єктів Scans не влізли у вільні 3,3 МБ — дрібний файл там бере 128 КБ. Раніше бралося «розмір теки мінус розмір копії» — і заміна, і
         перенесення старої версії в removed зливалися в одне число.  #>
     param($Job)
     $sum = 0L
+    $cl = [long]$script:cluster
+    function Get-Alloc { param([long]$L) if ($L -le 0) { 0L } else { [long]([math]::Ceiling($L / $cl) * $cl) } }
+    if ($Job.kind -ne "xml") {
+        foreach ($dd in @(Get-ChildItem $Job.src -Recurse -Directory -Force -ErrorAction SilentlyContinue)) {   # нова тека теж бере кластер
+            if ($Job.exclude -and ($dd.FullName + '\').StartsWith($Job.exclude + '\', [StringComparison]::OrdinalIgnoreCase)) { continue }
+            if (-not (Test-Path -LiteralPath (Join-Path $Job.dst $dd.FullName.Substring($Job.src.Length).TrimStart('\')))) { $sum += $cl }
+        }
+    }
     $files = if ($Job.kind -eq "xml") { @(Get-ChildItem $Job.src -File -Filter *.xml -Force -ErrorAction SilentlyContinue) }
              else { @(Get-ChildItem $Job.src -Recurse -File -Force -ErrorAction SilentlyContinue) }
     foreach ($f in $files) {
         if ($Job.exclude -and $f.FullName.StartsWith($Job.exclude + '\', [StringComparison]::OrdinalIgnoreCase)) { continue }
         $df = Join-Path $Job.dst $f.FullName.Substring($Job.src.Length).TrimStart('\')
         $d = Get-Item -LiteralPath $df -Force -ErrorAction SilentlyContinue
-        if (-not $d) { $sum += $f.Length; continue }
+        if (-not $d) { $sum += (Get-Alloc $f.Length); continue }
         if ($d.Length -eq $f.Length -and [math]::Abs(($d.LastWriteTimeUtc - $f.LastWriteTimeUtc).TotalSeconds) -le 2) { continue }
-        $sum += [math]::Max(0L, $f.Length - $d.Length)
+        $sum += [math]::Max(0L, (Get-Alloc $f.Length) - (Get-Alloc $d.Length))
     }
     return [long]$sum
 }
 function Get-Free { if ($env:NS_TEST_FREE) { return [long]$env:NS_TEST_FREE }   # лише для проб: удаваний вільний обсяг
     [long](Get-PSDrive ((Get-Item $Dest).PSDrive.Name)).Free }
+$script:cluster = 4096L   # розмір кластера диска-копії (exFAT D: — 128 КБ, FAT32 F: — 32 КБ)
+try {
+    $bs = (Get-CimInstance Win32_Volume -ErrorAction Stop | Where-Object { $_.DriveLetter -eq ((Get-Item $Dest).PSDrive.Name + ':') } | Select-Object -First 1).BlockSize
+    if ($bs -gt 0) { $script:cluster = [long]$bs }
+} catch { }
 function Format-Gb { param([long]$B) if ($B -lt 1GB) { "{0:N1} МБ" -f ($B / 1MB) } else { "{0:N2} ГБ" -f ($B / 1GB) } }
 
 $MARGIN = 32MB
