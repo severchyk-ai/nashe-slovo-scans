@@ -121,33 +121,37 @@ while ($true) {
 
     Write-Host "  Дивись підвали на верхньому моніторі: друкований номер має збігатися з номером файлу." -ForegroundColor White
     Write-Host "    Enter        — прийнято"
-    Write-Host "    5  або  3,7  — перезняти сторінку(и) з таким номером файлу"
+    Write-Host "    5  або  3,7  — перезняти сторінку(и) з таким номером файлу (вона вже є, вміст поганий)"
+    Write-Host "    +5           — вставити сторінку 5, якої ще немає (пропущений аркуш) — наступні самі зсунуться"
     Write-Host "    Q            — не приймати зараз (номер лишається «scanned»)"
     $ans = (Read-Host "  Вибір").Trim()
 
     if ($ans -match '^[QqКк]') { break }
 
-    if ($ans -match '^\d+(\s*,\s*\d+)*$') {
-        # Число, якого ще немає в маніфесті, — це не заміна, а бракуюча сторінка
+    if ($ans -match '^[+\d][\d,+\s]*$' -and $ans -match '\d') {
+        # Сторінка, якої ще немає в маніфесті, — це не заміна, а бракуюча сторінка
         # (напр. пропущений при скануванні аркуш): ns-rescan вимагає ІСНУЮЧОЇ
-        # сторінки й тут лише відмовляв би незрозумілою помилкою. 29.09.2026:
-        # 2372 — п'яту пропустили, кожна заміна зсувала «зайву» на одну далі
-        # (5→6→7→8→9), і десяту не було чим замінити, бо її не існувало.
-        $existing = @($man.pages | ForEach-Object { [int]$_.n })
-        $nums = @($ans -split '\s*,\s*' | ForEach-Object { [int]$_ })
-        $missing = @($nums | Where-Object { $existing -notcontains $_ })
-        if ($missing.Count -gt 0) {
-            Write-Host ""
-            Write-Host ("  Сторінки {0} у маніфесті ще немає — це не заміна, а бракуюча сторінка." -f ($missing -join ", ")) -ForegroundColor Yellow
-            Write-Host "  Заверши приймання клавішею Q і продовж сканування:" -ForegroundColor Yellow
-            Write-Host ("    powershell -NoProfile -ExecutionPolicy Bypass -File .\ns-scan.ps1 -Seq {0}" -f $Seq) -ForegroundColor Yellow
-            Write-Host "  Скрипт сам продовжить з наступної сторінки — поклади аркуш і натисни Enter." -ForegroundColor Yellow
-            continue
-        }
-        foreach ($pn in $nums) {
-            Write-Host ""
-            Write-Host "  Перезнімаю сторінку $pn…" -ForegroundColor Cyan
-            & "$PSScriptRoot\ns-rescan.ps1" -Seq $Seq -Page $pn -Reason "приймання: оператор попросив перезняти"
+        # сторінки. 29.09.2026: 2372 — п'яту пропустили, і без вставки кожна
+        # заміна лише зсувала «зайву» на одну далі (5→6→7→8→9), а десяту не було
+        # чим замінити, бо такої сторінки не існувало. Тепер за + автоматично
+        # йде ns-insertpage (вставляє й сам зсуває решту, як ns-droppage навпаки);
+        # без + для номера, якого в маніфесті нема, теж підставляємо вставку —
+        # заміна для неіснуючої сторінки однаково неможлива, тож плутанини нема.
+        $items = @($ans -split '\s*,\s*' | Where-Object { $_ } | ForEach-Object {
+            [pscustomobject]@{ Insert = $_.StartsWith('+'); N = [int]($_.TrimStart('+')) }
+        })
+        foreach ($it in $items) {
+            $existing = @($man.pages | ForEach-Object { [int]$_.n })   # перечитано після можливих попередніх дій цього рядка
+            if ($it.Insert -or ($existing -notcontains $it.N)) {
+                Write-Host ""
+                Write-Host "  Сторінка $($it.N) вставляється як бракуюча (поклади аркуш на скло)…" -ForegroundColor Cyan
+                & "$PSScriptRoot\ns-insertpage.ps1" -Seq $Seq -Page $it.N -Reason "приймання: оператор поклав пропущений аркуш"
+            } else {
+                Write-Host ""
+                Write-Host "  Перезнімаю сторінку $($it.N)…" -ForegroundColor Cyan
+                & "$PSScriptRoot\ns-rescan.ps1" -Seq $Seq -Page $it.N -Reason "приймання: оператор попросив перезняти"
+            }
+            $man = Read-NsManifest -IssueDir $issueDir   # для правильної перевірки наступного номера в цьому ж рядку
         }
         continue                                        # перевіряємо знову вже з новими файлами
     }
