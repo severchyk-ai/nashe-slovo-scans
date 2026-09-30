@@ -128,7 +128,23 @@ while ($true) {
     if ($ans -match '^[QqКк]') { break }
 
     if ($ans -match '^\d+(\s*,\s*\d+)*$') {
-        foreach ($pn in @($ans -split '\s*,\s*' | ForEach-Object { [int]$_ })) {
+        # Число, якого ще немає в маніфесті, — це не заміна, а бракуюча сторінка
+        # (напр. пропущений при скануванні аркуш): ns-rescan вимагає ІСНУЮЧОЇ
+        # сторінки й тут лише відмовляв би незрозумілою помилкою. 29.09.2026:
+        # 2372 — п'яту пропустили, кожна заміна зсувала «зайву» на одну далі
+        # (5→6→7→8→9), і десяту не було чим замінити, бо її не існувало.
+        $existing = @($man.pages | ForEach-Object { [int]$_.n })
+        $nums = @($ans -split '\s*,\s*' | ForEach-Object { [int]$_ })
+        $missing = @($nums | Where-Object { $existing -notcontains $_ })
+        if ($missing.Count -gt 0) {
+            Write-Host ""
+            Write-Host ("  Сторінки {0} у маніфесті ще немає — це не заміна, а бракуюча сторінка." -f ($missing -join ", ")) -ForegroundColor Yellow
+            Write-Host "  Заверши приймання клавішею Q і продовж сканування:" -ForegroundColor Yellow
+            Write-Host ("    powershell -NoProfile -ExecutionPolicy Bypass -File .\ns-scan.ps1 -Seq {0}" -f $Seq) -ForegroundColor Yellow
+            Write-Host "  Скрипт сам продовжить з наступної сторінки — поклади аркуш і натисни Enter." -ForegroundColor Yellow
+            continue
+        }
+        foreach ($pn in $nums) {
             Write-Host ""
             Write-Host "  Перезнімаю сторінку $pn…" -ForegroundColor Cyan
             & "$PSScriptRoot\ns-rescan.ps1" -Seq $Seq -Page $pn -Reason "приймання: оператор попросив перезняти"
