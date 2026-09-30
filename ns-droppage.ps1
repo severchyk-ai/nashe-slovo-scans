@@ -99,6 +99,14 @@ if ($man.PSObject.Properties.Name -contains 'dropped') { $hist2 = @($man.dropped
 $hist2 += [pscustomobject]@{ page = $Page; file = $drop.file; sha256 = $drop.sha256
                              parked = (Split-Path $parked -Leaf); at = $stamp; reason = $Reason }
 $man | Add-Member -NotePropertyName dropped -NotePropertyValue $hist2 -Force
+# межі вкладки (insert_pages) — за нумерацією файлів: вилучення до вкладки зсуває обидві,
+# усередині — кінець; порожня вкладка знімається (30.09.2026: раніше лишалися старі межі)
+if ($man.PSObject.Properties.Name -contains 'insert_pages' -and $man.insert_pages -match '^\s*(\d+)\s*-\s*(\d+)\s*$') {
+    $if = [int]$Matches[1]; $it = [int]$Matches[2]
+    if ($Page -lt $if) { $if--; $it-- } elseif ($Page -le $it) { $it-- }
+    if ($it -ge $if) { $man.insert_pages = "$if-$it" } else { $man.PSObject.Properties.Remove('insert_pages') }
+    Write-Host "  вкладка: $(if ($it -ge $if) { "$if-$it" } else { 'знято (порожня)' })"
+}
 $man.status = if (@($man.pages).Count -eq $man.pages_expected) { "scanned" } else { "qc_flagged" }
 Write-NsManifest -IssueDir $issueDir -Manifest $man
 

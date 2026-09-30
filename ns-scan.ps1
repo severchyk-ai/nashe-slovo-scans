@@ -165,9 +165,20 @@ function Move-NsRejected {
     Write-Host "      Файл збережено, не видалено: $dst" -ForegroundColor DarkYellow
 }
 
+function Clear-NsKeyBuffer {
+    # Натиснуте ПІД ЧАС сканування й перевірок не має запускати наступний скан
+    # (30.09.2026, 2374: подвійний Enter на 10-й сторінці — два скани підряд, p11
+    # той самий аркуш, різниця 0,006). Без консолі (ввід перенаправлено) — нічого.
+    try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch { }
+}
+$fastCur = Join-Path $script:NS_LIVE "fast_cur.gray"
+$fastPrev = Join-Path $script:NS_LIVE "fast_prev.gray"
+Remove-Item $fastPrev -Force -ErrorAction SilentlyContinue
+
 while ($true) {
     # Без двокрапки в кінці: Read-Host додає свою.
     $last = $next - 1
+    Clear-NsKeyBuffer
     $prompt = if ($last -ge 1) { "  [Enter] сторінка $next   [R] перезняти стор. $last   [V] вкладка   [Q] завершити" } else { "  [Enter] сторінка $next   [V] вкладка   [Q] завершити" }
     $ans = Read-Host -Prompt $prompt
     if ($ans -match '^[QqКк]') { break }
@@ -193,6 +204,7 @@ while ($true) {
         if (-not $NoView) { Set-NsLiveStatus -Status "scanning" -Page $last }
         & (Join-Path $PSScriptRoot "ns-rescan.ps1") -Seq $man.seq_first -Page $last -Reason "перезнято одразу під час сканування"
         $man = Read-NsManifest -IssueDir $issueDir
+        Remove-Item $fastPrev -Force -ErrorAction SilentlyContinue   # попередня сторінка змінилась — відбитка немає
         if (-not $NoView) {
             $prevF = if ($last -gt 1) { Join-Path $issueDir (Get-NsPageName -SeqFirst $man.seq_first -Date $man.date -Page ($last - 1)) } else { "" }
             $lw = Update-NsLive -Tif (Join-Path $issueDir (Get-NsPageName -SeqFirst $man.seq_first -Date $man.date -Page $last)) `
@@ -206,6 +218,7 @@ while ($true) {
     if (Test-Path $tmp) { Remove-Item $tmp -Force }
 
     if (-not $NoView) { Set-NsLiveStatus -Status "scanning" -Page $next }
+    Remove-Item $fastCur -Force -ErrorAction SilentlyContinue      # відбиток лише від ЦЬОГО скану
     & $script:NAPS2 -p $script:NAPS2_PROFILE -o $tmp --tiffcomp lzw 2>&1 | Out-Null
     if (-not $NoView -and -not (Test-Path $tmp)) { Set-NsLiveStatus -Status "ready" }
 
@@ -257,6 +270,28 @@ while ($true) {
         continue
     }
 
+    # Той самий аркуш ще раз, НЕ зрушений (подвійний Enter) — не записується.
+    # Відбиток 60x84 від працівника швидкого показу проти попередньої ЗАПИСАНОЇ сторінки.
+    # Поріг 0,010 (виміряно 30.09.2026 тим самим методом): незрушений аркуш 2374 p10/p11
+    # 0,0055; той самий аркуш перекладений (дублі 2331, 2350, перезнятий 2280/8)
+    # 0,0146-0,0213; різні сторінки 0,176-0,256. Перекладений дубль тут НЕ відхиляється
+    # (його дає й навмисний перезнімок) — про нього, як і раніше, тривога ns-livecheck (< 0,10).
+    # Без працівника (-NoView чи збій) відбитка немає — перевірка мовчить.
+    if ((Test-Path $fastCur) -and (Test-Path $fastPrev)) {
+        $fa = [IO.File]::ReadAllBytes($fastCur); $fb = [IO.File]::ReadAllBytes($fastPrev)
+        if ($fa.Length -eq $fb.Length -and $fa.Length -gt 0) {
+            $acc = 0.0
+            for ($i = 0; $i -lt $fa.Length; $i++) { $d = [double]($fa[$i] - $fb[$i]); $acc += $d * $d }
+            $same = [math]::Sqrt($acc / $fa.Length) / 255.0
+            if ($same -lt 0.010) {
+                Write-Host ("  [!] Той самий аркуш ще раз (відмінність від стор. {0}: {1:N4}) — НЕ записано. Поклади сторінку {2}." -f $last, $same, $next) -ForegroundColor Red
+                Move-NsRejected -Path $tmp -Page $next -Reason (("toy_samyy_arkush_{0:N4}" -f $same) -replace ",", ".")
+                if (-not $NoView) { Set-NsLiveStatus -Status "ready" }
+                continue
+            }
+        }
+    }
+
     $name = Get-NsPageName -SeqFirst $man.seq_first -Date $man.date -Page $next
     Move-Item -Path $tmp -Destination (Join-Path $issueDir $name) -Force
     $entry = Add-NsPage -IssueDir $issueDir -Manifest $man -PageNo $next -FileName $name
@@ -271,6 +306,7 @@ while ($true) {
         $entry.scanned_at, $next, $probe, $entry.bytes, $entry.sha256) -Encoding UTF8
 
     Write-Host ("  збережено: {0}  ({1}, {2:N0} МБ)" -f $name, $probe, ($entry.bytes / 1MB)) -ForegroundColor Green
+    if (Test-Path $fastCur) { Copy-Item $fastCur $fastPrev -Force } else { Remove-Item $fastPrev -Force -ErrorAction SilentlyContinue }
     if (-not $NoView) {
         # перевірки — ОКРЕМИМ ПРОЦЕСОМ: консоль одразу пропонує наступний скан,
         # а тривоги дописуються в перегляд за кілька секунд

@@ -62,6 +62,15 @@ def work(tif):
     rgb.save(tmp, "JPEG", quality=88)
     os.replace(tmp, prev_p)
     g = np.asarray(rgb.convert("L"), dtype=np.float32) / 255.0
+    # відбиток 60x84 (сірий, мін-макс) для ns-scan: той самий аркуш ще раз (подвійний Enter)
+    # не записується. Пишеться ДО resp.json — ns-scan читає його одразу після відповіді.
+    fpr = np.asarray(rgb.convert("L").resize((60, 84), Image.BILINEAR), dtype=np.float32)
+    lo, hi = float(fpr.min()), float(fpr.max())
+    fpr = (fpr - lo) / (hi - lo) * 255.0 if hi > lo else fpr * 0.0
+    ftmp = os.path.join(live, "fast_cur.gray.tmp")
+    with open(ftmp, "wb") as fh:
+        fh.write(np.clip(np.round(fpr), 0, 255).astype(np.uint8).tobytes())
+    os.replace(ftmp, os.path.join(live, "fast_cur.gray"))
     return float(g.mean()), float(g.std()), time.time() - t0
 
 
