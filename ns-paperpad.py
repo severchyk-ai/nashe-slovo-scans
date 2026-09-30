@@ -418,6 +418,10 @@ def main():
             out = cv2.copyMakeBorder(canvas, fm, fm, fm, fm, cv2.BORDER_CONSTANT,
                                      value=(frame_tone, frame_tone, frame_tone))
             Image.fromarray(out).save(q["out"])
+            # маска доданого (255 = синтез, рамка 0) — для мірила шва ns-seamprobe.py (30.09.2026)
+            if job.get("mask_dir"):
+                mk = cv2.copyMakeBorder((synth * 255).astype(np.uint8), fm, fm, fm, fm, cv2.BORDER_CONSTANT, value=0)
+                Image.fromarray(mk).save("%s/%s_synth.png" % (job["mask_dir"], q["name"]))
             report["pages"].append(rec)
             m, dr = rec["margin_block_mm"], rec["dirt"]
             sm = " ".join("%s %+.1f/%.1f x%.2f" % (s, v["dL"], v["dL_max"], v["sd_ratio"])

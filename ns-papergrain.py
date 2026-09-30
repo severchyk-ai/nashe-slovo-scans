@@ -1,0 +1,91 @@
+# -*- coding: utf-8 -*-
+"""Зерно доданого паперу — латками СПРАВЖНЬОГО паперу тієї ж сторінки (проба, 30.09.2026).
+
+Викликає ns-paperpad.py, коли в job "grain": "patch" (ns-render -PaperPad -PadGrain patch).
+За умовчанням ns-paperpad і далі кладе шум — цей модуль лише для A/B.
+
+Чому: оператор побачив шов на 2316/10 — «піксель дрібніший і одноманітніший». Мірило
+ns-seamprobe.py на відтвореному зразку: потужність зерна в смузі періодів 0,85-2 мм у
+доданому x0,30 від справжнього (log2 -1,75; контроль справжнє/справжнє -0,21), 0,42-0,85 мм
+-0,55 (контроль -0,12). Шум σ 0,6 пікс. не має крупних волокон і хмарності паперу.
+
+Як:
+  * тон — поле справжнього паперу, лише з масштабів 3-80 мм (без 1 мм: дрібніше несе
+    латка, інакше її хмарність лягла б удруге);
+  * зерно — залишок «папір мінус те саме поле» з латок 48 x 48 пікс. (4 мм при 300 dpi),
+    узятих лише там, де навколо 3 мм чистого паперу (урок 2318: латка не має переносити
+    друк; цятки й лінії вилучає ерозія маски паперу);
+  * латка — з того самого боку сторінки (там інший папір) і не глибше 25 мм від краю,
+    якщо таких досить; інакше будь-яка; щоразу випадкова, повтор сусідів не допускається;
+  * латки перекриваються на 12 пікс. з вагами cos/sin; сума зважених латок ділиться на
+    корінь суми КВАДРАТІВ ваг — розкид незалежних латок у перекритті й біля краю полотна
+    не падає (звичайне середнє дало б сітку тьмяніших смуг).
+Нічого не пише; повертає заповнення (float32 H x W x 3) для пікселів synth.
+"""
+import cv2
+import numpy as np
+
+P = 48          # латка, пікс. (4 мм при 300 dpi)
+O = 12          # перекриття, пікс.
+STEP = P - O
+
+
+def _weights():
+    w = np.ones(P, np.float32)
+    t = (np.arange(O, dtype=np.float32) + 0.5) / O * (np.pi / 2)
+    w[:O] = np.sin(t)
+    w[-O:] = np.cos(t)
+    return np.outer(w, w)
+
+
+def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng):
+    """canvas uint8 HxWx3 (справжнє на місці), synth — що заповнити, paper_ok — чистий
+    справжній папір, field_c — тон 3-80 мм, near — найближчий бік (0 L 1 R 2 T 3 B)."""
+    H, W = synth.shape
+    res = canvas.astype(np.float32) - field_c
+    r3 = max(1, int(round(3 * mm)))
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r3 + 1, 2 * r3 + 1))
+    src = cv2.erode((paper_ok & ~synth).astype(np.uint8), k) > 0
+    I = cv2.integral(src.astype(np.uint8))
+    ys, xs = np.mgrid[0:H - P:8, 0:W - P:8]
+    ys, xs = ys.ravel(), xs.ravel()
+    full = (I[ys + P, xs + P] - I[ys, xs + P] - I[ys + P, xs] + I[ys, xs]) == P * P
+    ys, xs = ys[full], xs[full]
+    if len(ys) < 20:
+        return None, {"patches_src": int(len(ys))}
+    cy, cx = ys + P // 2, xs + P // 2
+    side = near[cy, cx]
+    dedge = np.minimum(np.minimum(cx, W - 1 - cx), np.minimum(cy, H - 1 - cy)) / mm
+    wgt = _weights()
+    acc = np.zeros((H, W, 3), np.float32)
+    ys_s, xs_s = np.nonzero(synth)
+    y0, y1, x0, x1 = ys_s.min(), ys_s.max(), xs_s.min(), xs_s.max()
+    Is = cv2.integral(synth.astype(np.uint8))
+    w2 = np.zeros((H, W), np.float32)
+
+    def starts(a0, a1, n):
+        st = list(range(max(0, a0 - O), min(n - P, a1) + 1, STEP))
+        if st and st[-1] + P < min(n, a1 + 1 + O):
+            st.append(n - P)      # добити до краю полотна (там рамка)
+        return st
+    used, placed = [], 0
+    for ty in starts(y0, y1, H):
+        for tx in starts(x0, x1, W):
+            if Is[ty + P, tx + P] - Is[ty, tx + P] - Is[ty + P, tx] + Is[ty, tx] == 0:
+                continue
+            s = near[min(H - 1, ty + P // 2), min(W - 1, tx + P // 2)]
+            cand = np.nonzero((side == s) & (dedge <= 25))[0]
+            if len(cand) < 20:
+                cand = np.arange(len(ys))
+            for _ in range(8):     # не брати латку, узяту для сусідньої клітини
+                j = int(cand[rng.integers(len(cand))])
+                if not any(abs(ys[j] - uy) < P and abs(xs[j] - ux) < P for uy, ux in used[-6:]):
+                    break
+            used.append((ys[j], xs[j]))
+            acc[ty:ty + P, tx:tx + P] += res[ys[j]:ys[j] + P, xs[j]:xs[j] + P] * wgt[..., None]
+            w2[ty:ty + P, tx:tx + P] += wgt * wgt
+            placed += 1
+    # ділення на корінь суми квадратів ваг: розкид незалежних латок однаковий за будь-якого
+    # перекриття (і біля краю полотна, де сусідньої латки немає — там це просто одна латка)
+    fill = field_c + acc / np.sqrt(np.maximum(w2, 1e-6))[..., None]
+    return fill, {"patches_src": int(len(ys)), "patches_placed": placed}
