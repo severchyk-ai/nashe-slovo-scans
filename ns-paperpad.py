@@ -199,7 +199,7 @@ def _blur(a, sig):
     return cv2.resize(sm, (w, h), interpolation=cv2.INTER_LINEAR)
 
 
-def paper_field(canvas, weight, mm, fallback):
+def paper_field(canvas, weight, mm, fallback, scales=(1.0, 3.0, 8.0, 25.0, 80.0)):
     """Тон паперу для доданого: зважене розмиття справжнього паперу (weight — чистий папір),
     від дрібного масштабу до великого — кожен піксель бере найдрібніший, де паперу досить.
     Біля шва тон — із найближчого паперу, тож градієнт краю аркуша (9304/5 знизу: 214 на
@@ -210,7 +210,7 @@ def paper_field(canvas, weight, mm, fallback):
     num_src = canvas.astype(np.float32) * wt[..., None]
     field = np.empty((H, W, 3), np.float32)
     done = np.zeros((H, W), bool)
-    for sig_mm in (1.0, 3.0, 8.0, 25.0, 80.0):
+    for sig_mm in scales:
         sig = sig_mm * mm
         ws = _blur(wt, sig)
         ok = (ws > 0.05) & ~done
@@ -409,6 +409,19 @@ def main():
                     nk /= max(1e-3, nk.std())
                     noise[..., k] = sdmap[..., k] * (np.sqrt(rho) * n0 + np.sqrt(1 - rho) * nk)
                 fill = np.clip(field + noise, 0, 255).astype(np.uint8)
+                # проба 30.09.2026: зерно латками справжнього паперу (ns-papergrain.py), job "grain": "patch"
+                if job.get("grain") == "patch":
+                    import importlib.util
+                    spec = importlib.util.spec_from_file_location("ns_papergrain", __file__.replace("ns-paperpad.py", "ns-papergrain.py"))
+                    pg = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(pg)
+                    field_c = paper_field(canvas, paper_w, mm, q["P"], scales=(3.0, 8.0, 25.0, 80.0))
+                    qf, qinfo = pg.quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng)
+                    rec["grain_patch"] = qinfo
+                    if qf is not None:
+                        fill = np.clip(qf, 0, 255).astype(np.uint8)
+                # перенесений друк: у доданому пікселі на 30+ темніші за тон поля (має бути ~0)
+                rec["synth_dark_px"] = int(((luma(fill) < luma(field) - 30) & synth).sum())
                 canvas[synth] = fill[synth]
                 rec["grain_sd"] = [round(float(v), 2) for v in sd]
                 rec["grain_rho"] = round(rho, 2)

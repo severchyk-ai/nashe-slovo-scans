@@ -13,10 +13,10 @@ ns-seamprobe.py на відтвореному зразку: потужність
   * тон — поле справжнього паперу, лише з масштабів 3-80 мм (без 1 мм: дрібніше несе
     латка, інакше її хмарність лягла б удруге);
   * зерно — залишок «папір мінус те саме поле» з латок 48 x 48 пікс. (4 мм при 300 dpi),
-    узятих лише там, де навколо 3 мм чистого паперу (урок 2318: латка не має переносити
-    друк; цятки й лінії вилучає ерозія маски паперу);
-  * латка — з того самого боку сторінки (там інший папір) і не глибше 25 мм від краю,
-    якщо таких досить; інакше будь-яка; щоразу випадкова, повтор сусідів не допускається;
+    узятих лише з паперу тону поля далі 3 мм від чорнила (темніше за поле на 18+) — урок
+    2318: латка не має переносити друк. НЕ за гладкістю (див. коментар у quilt_fill);
+  * латка — спершу з паперу того самого боку за 12 мм від доданого (з чим око порівнює),
+    тоді того ж боку до 25 мм від краю, тоді будь-яка; повтор сусідів не допускається;
   * латки перекриваються на 12 пікс. з вагами cos/sin; сума зважених латок ділиться на
     корінь суми КВАДРАТІВ ваг — розкид незалежних латок у перекритті й біля краю полотна
     не падає (звичайне середнє дало б сітку тьмяніших смуг).
@@ -43,9 +43,18 @@ def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng):
     справжній папір, field_c — тон 3-80 мм, near — найближчий бік (0 L 1 R 2 T 3 B)."""
     H, W = synth.shape
     res = canvas.astype(np.float32) - field_c
-    r3 = max(1, int(round(3 * mm)))
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r3 + 1, 2 * r3 + 1))
-    src = cv2.erode((paper_ok & ~synth).astype(np.uint8), k) > 0
+    # Джерело — НЕ за гладкістю: paper_ok (розкид < 4 у вікні 1,5 мм) відсіює саме папір з
+    # крупною структурою 0,5-1,5 мм, і перша версія латок мала крупної смуги x0,36-0,48
+    # (2316/10 R log2 -1,21, 2277/7 L -1,44 — як шум). Тепер: справжній папір тону поля (±12)
+    # на відстані >= 3 мм від ЧОРНИЛА — пікселя, темнішого за тон поля на 18+ (друк, цятки,
+    # лінії; урок 2318: латка не переносить друк).
+    lw = np.array([0.299, 0.587, 0.114], np.float32)
+    Lc = canvas.astype(np.float32) @ lw
+    Lf = field_c @ lw
+    ink = (Lc < Lf - 18) & ~synth
+    dink = cv2.distanceTransform((~ink).astype(np.uint8), cv2.DIST_L2, 3)
+    src = ~synth & (np.abs(Lc - Lf) < 12) & (dink >= 3 * mm)
+    dsyn = cv2.distanceTransform((~synth).astype(np.uint8), cv2.DIST_L2, 3) / mm
     I = cv2.integral(src.astype(np.uint8))
     ys, xs = np.mgrid[0:H - P:8, 0:W - P:8]
     ys, xs = ys.ravel(), xs.ravel()
@@ -56,6 +65,7 @@ def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng):
     cy, cx = ys + P // 2, xs + P // 2
     side = near[cy, cx]
     dedge = np.minimum(np.minimum(cx, W - 1 - cx), np.minimum(cy, H - 1 - cy)) / mm
+    dnear = dsyn[cy, cx]      # відстань латки до доданого: спершу папір біля самого шва
     wgt = _weights()
     acc = np.zeros((H, W, 3), np.float32)
     ys_s, xs_s = np.nonzero(synth)
@@ -74,7 +84,9 @@ def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng):
             if Is[ty + P, tx + P] - Is[ty, tx + P] - Is[ty + P, tx] + Is[ty, tx] == 0:
                 continue
             s = near[min(H - 1, ty + P // 2), min(W - 1, tx + P // 2)]
-            cand = np.nonzero((side == s) & (dedge <= 25))[0]
+            cand = np.nonzero((side == s) & (dnear <= 12))[0]
+            if len(cand) < 20:
+                cand = np.nonzero((side == s) & (dedge <= 25))[0]
             if len(cand) < 20:
                 cand = np.arange(len(ys))
             for _ in range(8):     # не брати латку, узяту для сусідньої клітини

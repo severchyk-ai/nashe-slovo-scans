@@ -122,6 +122,11 @@ def main():
     kk = int(1.5 * mm) | 1
     sdb = np.sqrt(np.maximum(0, cv2.blur(Lb * Lb, (kk, kk)) - cv2.blur(Lb, (kk, kk)) ** 2))
     paper = (sdb < 4) & (L > 70)
+    # біля білої рамки (~0,5 мм) колір паперу в JPEG нейтральний: 2278/4 a* +0,01 проти -1,4…-1,5
+    # далі — однаково в доданих і справжніх пікселях. Смужки доданого на краю лежать саме там, і
+    # мірило показувало «da* +0,9…+1,0» замість правди. 1 мм від рамки не міряється (30.09.2026).
+    d_frame = cv2.distanceTransform((~frame).astype(np.uint8), cv2.DIST_L2, 3)
+    paper &= d_frame > 1.0 * mm
     d_to_real = cv2.distanceTransform((~real).astype(np.uint8), cv2.DIST_L2, 3)   # для пікселів доданого
     d_to_syn = cv2.distanceTransform((~synth).astype(np.uint8), cv2.DIST_L2, 3)   # для справжніх
     near = nearest_side(H, W)

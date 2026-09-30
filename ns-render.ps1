@@ -36,7 +36,8 @@ param(
     [switch]$NoWedge,             # не знімати білі клини після випрямлення (стара поведінка)
     [switch]$PaperPad,            # БЕЗ МАСШТАБУ: спільний розмір і центр — доповненням газетним папером (ns-paperpad.py; оператор 29.09.2026)
     [switch]$CenterV,             # з -PaperPad: центрувати друк і по висоті (за умовчанням поля верх/низ міняються порівну)
-    [string]$PadMaskDir = ""      # з -PaperPad: сюди маски доданого паперу pNN_synth.png (мірило шва ns-seamprobe.py)
+    [string]$PadMaskDir = "",     # з -PaperPad: сюди маски доданого паперу pNN_synth.png (мірило шва ns-seamprobe.py)
+    [string]$PadGrain = ""        # з -PaperPad: "patch" — зерно латками справжнього паперу (ns-papergrain.py, проба 30.09); порожньо — шум
 )
 # Стиснення до медіани номера — стандарт з 21.09.2026 (оператор: «виглядає
 # добре» на 2294/2308: рамка 6,7-7,1 мм, 2294/1 стиснуто на 3,75 % по ширині).
@@ -432,6 +433,7 @@ if ($PaperPad) {
     # Масштаб 0: ns-paperpad.py дорізає бруд, центрує друк і доповнює папером до спільного розміру; тут лише JPEG.
     $ppJob = [ordered]@{ dpi = $Dpi; frame_px = $fm; frame_tone = $FrameTone; center_v = [bool]$CenterV; seed = $Seq
                          report = (Join-Path $render "_paperpad.json"); pages = @() }
+    if ($PadGrain) { $ppJob.grain = $PadGrain }
     if ($PadMaskDir) { New-Item -ItemType Directory -Path $PadMaskDir -Force | Out-Null; $ppJob.mask_dir = $PadMaskDir }
     # Бік page_edge, який записав ns-prepare із заміру ниток (той самий знак у prepare.json, edge_source
     # ns-spinescan), — не вказівка оператора: бруд за ним дорізається (2278/4 справа — нитки лишились).
