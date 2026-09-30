@@ -52,6 +52,17 @@ foreach ($d in $dirs) {
         }
     }
 
+    # сліди обірваного зсуву (ns-insertpage / ns-droppage): журнал чи тимчасові імена.
+    # Файли під *_tmp — це майстри, яких перевірка за маніфестом не бачить (30.09.2026).
+    $traces = @(Get-ChildItem -LiteralPath $d.FullName -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -in '_insert.json', '_drop.json' -or $_.Name -like '*.ins_tmp' -or $_.Name -like '*.drop_tmp' -or $_.Name -like '*.rst_tmp' -or $_.Name -like '_incoming_ins_*' })
+    if ($traces.Count) {
+        $names = @($traces | ForEach-Object { $_.Name })
+        $hint = if (@($names | Where-Object { $_ -like '*drop*' }).Count) { "обірваний ns-droppage — розібрати вручну за _drop.json" }
+                else { "ns-insertpage.ps1 -Seq $($man.seq_first) -Recover" }
+        $problems += "$($man.seq_first) : сліди обірваної операції: $($names -join ', ') — $hint"
+    }
+
     # перевірка #1 зі специфікації: кількість сторінок
     if (@($man.pages).Count -ne $man.pages_expected) {
         $problems += "$($man.seq_first) : сторінок $(@($man.pages).Count), очікувалось $($man.pages_expected)"

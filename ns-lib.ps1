@@ -1109,6 +1109,41 @@ function Test-NsPageDurable {
     (Get-NsHash $full) -eq $PageEntry.sha256
 }
 
+function Restore-NsNamesByHash {
+    <#  Повернути файлам сторінок імена з маніфесту за ХЕШЕМ — після обірваного
+        зсуву (ns-insertpage, ns-droppage): частина файлів уже під новими чи
+        тимчасовими іменами (*.ins_tmp, *.drop_tmp), а маніфест ще старий.
+        Кандидати — усі *.tif і *_tmp у теці номера, крім _incoming*. Двофазно,
+        як сам зсув. Вміст не міняється; read-only ставиться назад. Повертає
+        список сторінок, яких за хешем не знайдено (порожній — усе на місці).
+        30.09.2026: Rename-Item без -ErrorAction Stop на заблокованому файлі
+        не зупиняв ns-insertpage, і маніфест записувався з іменами, яких немає. #>
+    param([string]$IssueDir, $Manifest)
+    $need = @($Manifest.pages | Where-Object {
+        $f = Join-Path $IssueDir $_.file
+        -not (Test-Path -LiteralPath $f) -or (Get-NsHash $f) -ne $_.sha256 })
+    if ($need.Count -eq 0) { return @() }
+    $byHash = @{}
+    Get-ChildItem -LiteralPath $IssueDir -File |
+        Where-Object { ($_.Name -like "*.tif" -or $_.Name -like "*.ins_tmp" -or $_.Name -like "*.drop_tmp") -and $_.Name -notlike "_incoming*" } |
+        ForEach-Object { $byHash[(Get-NsHash $_.FullName)] = $_.Name }
+    $moves = @(); $lost = @()
+    foreach ($p in $need) {
+        if ($byHash.ContainsKey($p.sha256)) { $moves += [pscustomobject]@{ from = $byHash[$p.sha256]; to = $p.file } }
+        else { $lost += $p.file }
+    }
+    foreach ($m in $moves) {
+        $f = Join-Path $IssueDir $m.from
+        Set-ItemProperty -LiteralPath $f -Name IsReadOnly -Value $false -ErrorAction Stop
+        Rename-Item -LiteralPath $f -NewName "$($m.from).rst_tmp" -ErrorAction Stop
+    }
+    foreach ($m in $moves) {
+        Rename-Item -LiteralPath (Join-Path $IssueDir "$($m.from).rst_tmp") -NewName $m.to -ErrorAction Stop
+        Set-ItemProperty -LiteralPath (Join-Path $IssueDir $m.to) -Name IsReadOnly -Value $true -ErrorAction Stop
+    }
+    return $lost
+}
+
 function Find-NsOrphans {
     <#  Файли в теці, яких немає в маніфесті — показати, але не підхоплювати. #>
     param([string]$IssueDir, $Manifest)

@@ -11,7 +11,9 @@
 #   3. на верхньому моніторі — смуга підвалів усіх сторінок: оператор дивиться, що друковані
 #      номери йдуть по порядку й збігаються з номерами файлів;
 #   4. Enter — прийнято (state = accepted у маніфесті); номер(и) сторінок через кому — перезняти
-#      (ns-rescan) і перевірити знову; Q — не приймати зараз.
+#      (ns-rescan) і перевірити знову; +N — вставити пропущений аркуш (ns-insertpage, лише з «+»,
+#      по одній); V a-b — позначити вкладку (ns-insert), V - — прибрати; Q — не приймати зараз.
+#      Біля кожної смуги й у консолі — очікуваний друкований номер з поправкою на вкладку.
 # Прийняття з зауваженнями — лише після явного «y». Кількість сторінок, що відрізняється від
 # заявленої, оператор підтверджує окремо (тоді pages_expected = фактична, статус scanned).
 # Коди виходу: 0 — прийнято (або -NoPrompt без помилок), 2 — не прийнято.
@@ -72,16 +74,21 @@ function Invoke-NsAcceptCheck {
     if ($count -ne [int]$Man.pages_expected) {
         $flags += @{ lvl = "err"; text = "сторінок $count, а заявлено $($Man.pages_expected)" }
     }
-    $u = Get-NsUsualPages -Year ([int]$Man.year) -ExceptSeq ([int]$Man.seq_first)
-    if ($u -and $count -ne $u.pages) {
-        $flags += @{ lvl = "warn"; text = "у $($Man.year) р. зазвичай $($u.pages) стор. ($($u.have) з $($u.of) номерів), тут $count" }
-    }
     $ins = if ($Man.PSObject.Properties.Name -contains 'insert_pages') { [string]$Man.insert_pages } else { "" }
+    # вкладка має свої аркуші: 2373 — 10 + 6 вкладки = 16, і тривога «зазвичай 10, тут 16» була хибна
+    $insLen = 0
+    if ($ins -match '^\s*(\d+)\s*-\s*(\d+)\s*$') { $insLen = [int]$Matches[2] - [int]$Matches[1] + 1 }
+    $u = Get-NsUsualPages -Year ([int]$Man.year) -ExceptSeq ([int]$Man.seq_first)
+    if ($u -and $count -ne $u.pages -and ($count - $insLen) -ne $u.pages) {
+        $t = "у $($Man.year) р. зазвичай $($u.pages) стор. ($($u.have) з $($u.of) номерів), тут $count"
+        if ($insLen) { $t += " (з них вкладка $ins — $insLen)" }
+        $flags += @{ lvl = "warn"; text = $t }
+    }
     if (-not $NoView) {
         Write-NsLiveState -State @{
             status = "ready"; seq = $Man.seq_first; page = $count; expected = $count
             dims = "приймання"; frames = 1
-            expect = "Підвали всіх $count сторінок — друковані номери мають іти по порядку й збігатися з підписом «файл pNN»" + $(if ($ins) { " (вкладка $ins має свою нумерацію)" } else { "" })
+            expect = "Підвали всіх $count сторінок — друкований номер має збігатися з тим, що в підписі «pNN → …»" + $(if ($ins) { " (вкладка ${ins}: чотири кути довгих боків — номер у парі, що читається прямо)" } else { "" })
             warnings = $flags; checking = $false; next = $count + 1
         }
     }
@@ -100,8 +107,8 @@ while ($true) {
     Write-Host ""
     Write-Host ("  {0} ({1}, № {2} у році): {3} сторінок" -f $man.seq_first, $man.date, $man.issue_no_in_year, $res.Count)
     foreach ($p in $res.Rep.pages) {
-        Write-Host ("    стор. {0,2}   {1}x{2}   кадрів {3}   яскравість {4:N2}   розкид {5:N3}" -f `
-                    $p.n, $p.w, $p.h, $p.frames, $p.mean, $p.sd) -ForegroundColor DarkGray
+        Write-Host ("    стор. {0,2}   {1}x{2}   кадрів {3}   яскравість {4:N2}   розкид {5:N3}   → {6}" -f `
+                    $p.n, $p.w, $p.h, $p.frames, $p.mean, $p.sd, $p.expect) -ForegroundColor DarkGray
     }
     Write-Host ""
     $errs = @($res.Flags | Where-Object { $_.lvl -eq "err" })
@@ -123,26 +130,49 @@ while ($true) {
     Write-Host "    Enter        — прийнято"
     Write-Host "    5  або  3,7  — перезняти сторінку(и) з таким номером файлу (вона вже є, вміст поганий)"
     Write-Host "    +5           — вставити сторінку 5, якої ще немає (пропущений аркуш) — наступні самі зсунуться"
+    Write-Host "    V 3-8        — вкладка зі своєю нумерацією на файлах 3-8 (V - — прибрати позначку)"
     Write-Host "    Q            — не приймати зараз (номер лишається «scanned»)"
     $ans = (Read-Host "  Вибір").Trim()
 
     if ($ans -match '^[QqКк]') { break }
+
+    # вкладку часто помічають саме тут, на аркуші підвалів (оператор, 30.09.2026) —
+    # те саме, що клавіша V у ns-scan / ns-insert.ps1; очікувані номери перерахуються
+    if ($ans -match '^[VvМм]\s*(.*)$') {
+        $arg = $Matches[1].Trim()
+        if ($arg -eq '-' -or $arg -eq '0') { & "$PSScriptRoot\ns-insert.ps1" -Seq $Seq -Clear }
+        elseif ($arg -match '^(\d+)\s*-\s*(\d+)$') { & "$PSScriptRoot\ns-insert.ps1" -Seq $Seq -Pages "$($Matches[1])-$($Matches[2])" }
+        else { Write-Host "  Вкладка: «V 3-8» (файли з 3-го по 8-й) або «V -» — прибрати." -ForegroundColor Yellow }
+        continue
+    }
 
     if ($ans -match '^[+\d][\d,+\s]*$' -and $ans -match '\d') {
         # Сторінка, якої ще немає в маніфесті, — це не заміна, а бракуюча сторінка
         # (напр. пропущений при скануванні аркуш): ns-rescan вимагає ІСНУЮЧОЇ
         # сторінки. 29.09.2026: 2372 — п'яту пропустили, і без вставки кожна
         # заміна лише зсувала «зайву» на одну далі (5→6→7→8→9), а десяту не було
-        # чим замінити, бо такої сторінки не існувало. Тепер за + автоматично
-        # йде ns-insertpage (вставляє й сам зсуває решту, як ns-droppage навпаки);
-        # без + для номера, якого в маніфесті нема, теж підставляємо вставку —
-        # заміна для неіснуючої сторінки однаково неможлива, тож плутанини нема.
-        $items = @($ans -split '\s*,\s*' | Where-Object { $_ } | ForEach-Object {
-            [pscustomobject]@{ Insert = $_.StartsWith('+'); N = [int]($_.TrimStart('+')) }
-        })
+        # чим замінити, бо такої сторінки не існувало. Тепер за + йде
+        # ns-insertpage (вставляє й сам зсуває решту, як ns-droppage навпаки).
+        # 30.09.2026 (перегляд інструментів): вставка — ЛИШЕ з явним «+». Голе
+        # число сторінки, якої немає (друкарська «11» у номері з 10), раніше
+        # мовчки запускало сканер і дописувало аркуш — тепер відмова з підказкою.
+        # «5+3», «5 3» — не зрозуміло (раніше падало на [int]). Вставка — по
+        # одній у рядку: після неї номери наступних файлів зсуваються, і решта
+        # рядка вказувала б уже не на ті сторінки, які оператор бачив на аркуші.
+        $toks = @($ans -split '\s*,\s*' | Where-Object { $_ })
+        if (@($toks | Where-Object { $_ -notmatch '^\+?\d+$' }).Count) { Write-Host "  Не зрозумів: пиши «5», «3,7» або «+5»." -ForegroundColor Yellow; continue }
+        $items = @($toks | ForEach-Object { [pscustomobject]@{ Insert = $_.StartsWith('+'); N = [int]($_.TrimStart('+')) } })
+        if (@($items | Where-Object { $_.Insert }).Count -and $items.Count -gt 1) {
+            Write-Host "  Вставку (+N) — окремо, по одній: після неї номери наступних файлів зсуваються." -ForegroundColor Yellow; continue
+        }
+        $existing = @($man.pages | ForEach-Object { [int]$_.n })
+        $absent = @($items | Where-Object { -not $_.Insert -and $existing -notcontains $_.N })
+        if ($absent.Count) {
+            Write-Host ("  Сторінки {0} у номері немає (є 1-{1}). Пропущений аркуш — введи +{0}: вставиться, наступні зсунуться." -f $absent[0].N, $existing.Count) -ForegroundColor Yellow
+            continue
+        }
         foreach ($it in $items) {
-            $existing = @($man.pages | ForEach-Object { [int]$_.n })   # перечитано після можливих попередніх дій цього рядка
-            if ($it.Insert -or ($existing -notcontains $it.N)) {
+            if ($it.Insert) {
                 Write-Host ""
                 Write-Host "  Сторінка $($it.N) вставляється як бракуюча (поклади аркуш на скло)…" -ForegroundColor Cyan
                 & "$PSScriptRoot\ns-insertpage.ps1" -Seq $Seq -Page $it.N -Reason "приймання: оператор поклав пропущений аркуш"
