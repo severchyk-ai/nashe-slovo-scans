@@ -25,6 +25,10 @@
          потужність у смугах періоду 0,17-0,25 / 0,25-0,42 / 0,42-0,85 / 0,85-2 мм;
          log2(A/B) по смугах (0 — те саме зерно; > 0 — у доданому більше; дрібне
          зерно шуму дає + у першій смузі й − у крупних).
+  «доданий / чистий папір N мм від шва» (01.10.2026) — те саме зерно A проти справжнього
+         паперу, що не ближче 1,5 мм до чорнила, окремо за відстанню від шва. B бере й папір
+         із друком звороту, що просвічує, і пошкоджений край (корінець 2316/10: здертий шар,
+         клей) — там «шов» міряє не латки. Судити за рядком 3-6 / 6-12 мм того ж боку.
 Нічого не змінює.
 """
 import argparse
@@ -43,6 +47,8 @@ Image.MAX_IMAGE_PIXELS = None
 NSEG = 20
 TILE = 24
 BANDS_MM = [(0.17, 0.25), (0.25, 0.42), (0.42, 0.85), (0.85, 2.0)]
+DIST_EDGES = [3.0, 6.0, 12.0, 25.0]
+DIST_LABELS = ["0-3", "3-6", "6-12", "12-25", ">25"]
 
 
 def nearest_side(H, W):
@@ -147,11 +153,22 @@ def main():
         return I[y + TILE, x + TILE] - I[y, x + TILE] - I[y + TILE, x] + I[y, x]
     full = TILE * TILE
     tiles = {s: {"A": [], "B": [], "C": []} for s in "LRTB"}
+    # ЧИСТИЙ папір за відстанню від шва (01.10.2026): плитка цілком справжня і не ближче 1,5 мм до
+    # чорнила (темніше за поле 3 мм на L* 7). Смуга B вище бере все «гладке» у 6 мм від шва — і друк
+    # звороту, що просвічує, і здертий шар паперу на корінці: 2316/10 R крупна смуга 0-3 мм від шва
+    # 1031, 3-6 мм 578, поле з іншого боку 478-562, латки 518 — «шов −1,20» там міряв корінець, не латки.
+    ink = (L < cv2.GaussianBlur(L, (0, 0), 3 * mm) - 7) & real
+    d_ink = cv2.distanceTransform((~ink).astype(np.uint8), cv2.DIST_L2, 3)
+    ireal = cv2.integral(real.astype(np.uint8))
+    iink = cv2.integral((d_ink < 1.5 * mm).astype(np.uint8))
+    byd = {s: {g: [] for g in DIST_LABELS} for s in "LRTB"}
     for y in ys:
         for x in xs:
             cy, cx = y + TILE // 2, x + TILE // 2
             s = "LRTB"[near[cy, cx]]
             nsyn = box(ii, y, x)
+            if nsyn == 0 and box(ireal, y, x) == full and box(iink, y, x) == 0:
+                byd[s][DIST_LABELS[int(np.searchsorted(DIST_EDGES, d_to_syn[cy, cx] / mm, side="right"))]].append((y, x))
             if nsyn == full and box(ipp, y, x) >= 0.95 * full:
                 tiles[s]["A"].append((y, x))
             elif nsyn == 0 and box(ip, y, x) >= 0.95 * full:
@@ -176,6 +193,17 @@ def main():
             r["grain_seam_log2"] = [round(float(np.log2(pw["A"][i] / pw["B"][i])), 2) for i in range(len(BANDS_MM))]
         if pw["C"] is not None and pw["B"] is not None:
             r["grain_ctrl_log2"] = [round(float(np.log2(pw["C"][i] / pw["B"][i])), 2) for i in range(len(BANDS_MM))]
+        r["clean_by_dist"] = {}
+        for g in DIST_LABELS:
+            tl = byd[s][g]
+            if len(tl) > 4000:
+                tl = tl[::len(tl) // 4000 + 1]
+            pg = band_power(np.array([L[y:y + TILE, x:x + TILE] for y, x in tl], np.float32), a.dpi)
+            if pg is not None and pw["A"] is not None and len(byd[s][g]) >= 50:
+                r["clean_by_dist"][g] = {"tiles": len(byd[s][g]), "power": [round(float(v), 1) for v in pg],
+                                         "added_log2": [round(float(np.log2(pw["A"][i] / pg[i])), 2) for i in range(len(BANDS_MM))]}
+        if pw["A"] is not None:
+            r["power_added"] = [round(float(v), 1) for v in pw["A"]]
         res["sides"][s] = r
     bands = " / ".join("%.2g-%.2g" % b for b in BANDS_MM)
     print("%s  (зерно: log2 потужності A/B у смугах %s мм; колір: медіана/найбільше за відрізками)" % (a.image, bands))
@@ -188,6 +216,10 @@ def main():
                     (c["dL"][0], c["dL"][1], c["da"][0], c["da"][1], c["db"][0], c["db"][1], c["dE"][0], c["dE"][1])) if c else "колір —"
             gtxt = ("зерно " + " ".join("%+.2f" % v for v in g)) if g else "зерно —"
             print("    %s %s | %s" % (nm, ctxt, gtxt))
+        few = "  — МАЛО плиток доданого (%d < 200), не висновок" % r["tiles"]["A"] if r["tiles"]["A"] < 200 else ""
+        for g, v in r["clean_by_dist"].items():
+            print("    доданий / чистий папір %5s мм від шва (%5d плиток): зерно %s   (крупна смуга: %.0f проти %.0f)%s"
+                  % (g, v["tiles"], " ".join("%+.2f" % q for q in v["added_log2"]), r["power_added"][-1], v["power"][-1], few))
     if a.json:
         json.dump(res, open(a.json, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 

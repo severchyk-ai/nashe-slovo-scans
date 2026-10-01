@@ -37,7 +37,8 @@ param(
     [switch]$PaperPad,            # БЕЗ МАСШТАБУ: спільний розмір і центр — доповненням газетним папером (ns-paperpad.py; оператор 29.09.2026)
     [switch]$CenterV,             # з -PaperPad: центрувати друк і по висоті (за умовчанням поля верх/низ міняються порівну)
     [string]$PadMaskDir = "",     # з -PaperPad: сюди маски доданого паперу pNN_synth.png (мірило шва ns-seamprobe.py)
-    [string]$PadGrain = ""        # з -PaperPad: "patch" — зерно латками справжнього паперу (ns-papergrain.py, проба 30.09); порожньо — шум
+    [string]$PadGrain = "",       # з -PaperPad: "patch" — зерно латками справжнього паперу (ns-papergrain.py, проба 30.09); порожньо — шум
+    [switch]$KeepTmp              # не прибирати тимчасову теку (PNG після балансу, _paperpad_job.json, pNN_pp.png до JPEG) — лише для дослідів
 )
 # Стиснення до медіани номера — стандарт з 21.09.2026 (оператор: «виглядає
 # добре» на 2294/2308: рамка 6,7-7,1 мм, 2294/1 стиснуто на 3,75 % по ширині).
@@ -546,7 +547,8 @@ foreach ($p in $pages) {
     Write-Host ("  {0}  {1}  {2:N2} МБ" -f $p.Name, $note, $mb)
 }
 
-Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+if ($KeepTmp) { Write-Host "  тимчасову теку лишено: $tmp" -ForegroundColor Yellow }
+else { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 
 # _fit.json: посторінкові числа зведення розміру (для виміру стандарту рамки,
 # 28.09.2026). На результат не впливає; збій запису не зупиняє render.

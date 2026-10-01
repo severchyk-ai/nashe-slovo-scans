@@ -79,16 +79,21 @@ def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng):
             st.append(n - P)      # добити до краю полотна (там рамка)
         return st
     used, placed = [], 0
+    stage = {s: [0, 0, 0] for s in "LRTB"}    # звідки латки: за 12 мм від доданого / до 25 мм від краю / будь-де
     for ty in starts(y0, y1, H):
         for tx in starts(x0, x1, W):
             if Is[ty + P, tx + P] - Is[ty, tx + P] - Is[ty + P, tx] + Is[ty, tx] == 0:
                 continue
             s = near[min(H - 1, ty + P // 2), min(W - 1, tx + P // 2)]
             cand = np.nonzero((side == s) & (dnear <= 12))[0]
+            st = 0
             if len(cand) < 20:
                 cand = np.nonzero((side == s) & (dedge <= 25))[0]
+                st = 1
             if len(cand) < 20:
                 cand = np.arange(len(ys))
+                st = 2
+            stage["LRTB"[s]][st] += 1
             for _ in range(8):     # не брати латку, узяту для сусідньої клітини
                 j = int(cand[rng.integers(len(cand))])
                 if not any(abs(ys[j] - uy) < P and abs(xs[j] - ux) < P for uy, ux in used[-6:]):
@@ -100,4 +105,5 @@ def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng):
     # ділення на корінь суми квадратів ваг: розкид незалежних латок однаковий за будь-якого
     # перекриття (і біля краю полотна, де сусідньої латки немає — там це просто одна латка)
     fill = field_c + acc / np.sqrt(np.maximum(w2, 1e-6))[..., None]
-    return fill, {"patches_src": int(len(ys)), "patches_placed": placed}
+    return fill, {"patches_src": int(len(ys)), "patches_placed": placed,
+                  "stage": {k: v for k, v in stage.items() if sum(v)}}
