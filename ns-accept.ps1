@@ -8,8 +8,9 @@
 # Що робить:
 #   1. ns-acceptcheck.py: кадри (1 на сторінку), розмір, порожні/чорні, дублі КОЖНОЇ з КОЖНОЮ;
 #   2. кількість сторінок проти заявленої й проти звичної для року (за реєстром);
-#   3. на верхньому моніторі — смуга підвалів усіх сторінок: оператор дивиться, що друковані
-#      номери йдуть по порядку й збігаються з номерами файлів;
+#   3. аркуш підвалів усіх сторінок на верхньому моніторі — ЛИШЕ коли є тривога або на вимогу
+#      (П / P / З); чистий номер — рядок «Технічно гаразд — Enter прийняти» (рішення оператора
+#      30.09.2026: кожну сторінку він звіряє одразу після скану; страховка — ns-pagecheck);
 #   4. Enter — прийнято (state = accepted у маніфесті); номер(и) сторінок через кому — перезняти
 #      (ns-rescan) і перевірити знову; +N — вставити пропущений аркуш (ns-insertpage, лише з «+»,
 #      по одній); -N — прибрати зайву сторінку (ns-droppage, з підтвердженням); V a-b — позначити
@@ -37,7 +38,8 @@ $man = Read-NsManifest -IssueDir $issueDir
 if (-not $man -or @($man.pages).Count -eq 0) { Write-Host "У номері $Seq немає сторінок." -ForegroundColor Red; exit 1 }
 
 New-Item -ItemType Directory -Path $script:NS_LIVE -Force | Out-Null
-$sheet = Join-Path $script:NS_LIVE "preview.jpg"
+$sheet = Join-Path $script:NS_LIVE "accept_sheet.jpg"     # складається завжди, показується за потреби
+$preview = Join-Path $script:NS_LIVE "preview.jpg"         # те, що бачить вікно перегляду
 $json = Join-Path $script:NS_LIVE "accept.json"
 
 # вікно перегляду: якщо ns-scan його вже відкрив — користуємось ним; ні — відкриваємо своє
@@ -85,25 +87,39 @@ function Invoke-NsAcceptCheck {
         if ($insLen) { $t += " (з них вкладка $ins — $insLen)" }
         $flags += @{ lvl = "warn"; text = $t }
     }
-    if (-not $NoView) {
-        Write-NsLiveState -State @{
-            status = "ready"; seq = $Man.seq_first; page = $count; expected = $count
-            dims = "приймання"; frames = 1
-            expect = "Підвали всіх $count сторінок — друкований номер має збігатися з тим, що в підписі «pNN → …»" + $(if ($ins) { " (вкладка ${ins}: чотири кути довгих боків — номер у парі, що читається прямо)" } else { "" })
-            warnings = $flags; checking = $false; next = $count + 1
-        }
+    return @{ Rep = $rep; Flags = $flags; Count = $count; Ins = $ins }
+}
+
+function Show-NsAcceptSheet {
+    <#  Аркуш підвалів на верхній монітор. Рішення оператора 30.09.2026: лише коли є тривога
+        або на вимогу (П) — кожну сторінку він звіряє одразу після скану, а страховка —
+        ns-pagecheck раз на ~10 номерів. Чистий номер аркуша не показує.            #>
+    param($Man, $Res)
+    if ($NoView -or -not (Test-Path $sheet)) { return }
+    Copy-Item $sheet $preview -Force
+    Write-NsLiveState -State @{
+        status = "ready"; seq = $Man.seq_first; page = $Res.Count; expected = $Res.Count
+        dims = "приймання"; frames = 1
+        expect = "Підвали всіх $($Res.Count) сторінок — друкований номер має збігатися з тим, що в підписі «pNN → …»" + $(if ($Res.Ins) { " (вкладка $($Res.Ins): чотири кути довгих боків — номер у парі, що читається прямо)" } else { "" })
+        warnings = $Res.Flags; checking = $false; next = $Res.Count + 1
     }
-    return @{ Rep = $rep; Flags = $flags; Count = $count }
 }
 
 $accepted = $false
+$reuse = $false; $wantSheet = $false
 while ($true) {
+    if (-not $reuse) {
     Write-Host ""
     Write-Host "  ПРИЙМАННЯ НОМЕРА $Seq" -ForegroundColor Cyan
     Write-Host "  $line" -ForegroundColor DarkGray
     Write-Host "  Перевіряю кадри, розмір, порожні, дублі; складаю підвали…" -ForegroundColor DarkGray
     $man = Read-NsManifest -IssueDir $issueDir
     try { $res = Invoke-NsAcceptCheck -Man $man } catch { Write-Host "  ПОМИЛКА перевірки: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
+    }
+    $reuse = $false
+    $clean = ($res.Flags.Count -eq 0)
+    if (-not $clean -or $wantSheet) { Show-NsAcceptSheet -Man $man -Res $res }
+    $wantSheet = $false
 
     Write-Host ""
     Write-Host ("  {0} ({1}, № {2} у році): {3} сторінок" -f $man.seq_first, $man.date, $man.issue_no_in_year, $res.Count)
@@ -127,8 +143,13 @@ while ($true) {
         exit $(if ($errs.Count -gt 0) { 2 } else { 0 })
     }
 
-    Write-Host "  Дивись підвали на верхньому моніторі: друкований номер має збігатися з номером файлу." -ForegroundColor White
+    if ($clean) {
+        Write-Host "  Технічно гаразд — Enter прийняти." -ForegroundColor Green
+    } else {
+        Write-Host "  Дивись підвали на верхньому моніторі: друкований номер має збігатися з номером файлу." -ForegroundColor White
+    }
     Write-Host "    Enter        — прийнято"
+    Write-Host "    П            — показати аркуш підвалів на верхньому моніторі"
     Write-Host "    5  або  3,7  — перезняти сторінку(и) з таким номером файлу (вона вже є, вміст поганий)"
     Write-Host "    +5           — вставити сторінку 5, якої ще немає (пропущений аркуш) — наступні самі зсунуться"
     Write-Host "    -11          — прибрати зайву сторінку 11 (той самий аркуш удруге), наступні підтягнуться"
@@ -152,6 +173,9 @@ while ($true) {
     }
 
     if ($ans -match '^[QqКк]') { break }
+
+    # П — показати аркуш підвалів без повторної перевірки (P — латиницею, та сама клавіша)
+    if ($ans -match '^[ПпPpЗз]$') { $wantSheet = $true; $reuse = $true; Write-Host "  Аркуш підвалів — на верхньому моніторі." -ForegroundColor Cyan; continue }
 
     # вкладку часто помічають саме тут, на аркуші підвалів (оператор, 30.09.2026) —
     # те саме, що клавіша V у ns-scan / ns-insert.ps1; очікувані номери перерахуються
