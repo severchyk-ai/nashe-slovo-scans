@@ -38,13 +38,20 @@ def _weights():
     return np.outer(w, w)
 
 
-def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng, zero_mean=False, dest_field=None):
+def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng, zero_mean=False, dest_field=None, src_block=None,
+               src_pref=None):
     """canvas uint8 HxWx3 (справжнє на місці), synth — що заповнити, paper_ok — чистий
     справжній папір, field_c — тон 3-80 мм, near — найближчий бік (0 L 1 R 2 T 3 B).
     zero_mean — з кожної латки зняти її власне середнє (01.10.2026): джерело — найчистіший папір,
     він світліший за поле, яке усереднює й цятки з просвітом (2277/7 L: доданий на +0,4…+0,7 L*
     світліший за папір 2-4 мм від шва); тон тоді несе лише поле. dest_field — тон місця
-    призначення, якщо не field_c (підгонка до місцевого паперу біля шва, ns-paperpad seam_tone)."""
+    призначення, якщо не field_c (підгонка до місцевого паперу біля шва, ns-paperpad seam_tone).
+    src_block — що НЕ може бути джерелом, якщо це не весь synth: з рампою (seam 3) synth — це й смуга
+    справжнього паперу 5 мм уздовж швів, і без неї джерел лишалося б мало; тоді латка не береться з
+    місця, що перекривається з її власною клітиною.
+    src_pref — де брати латки насамперед (поля сторінки): усередині блоку друку «чистий» папір несе
+    просвіт звороту, і на широкій доданій смузі (2316/10 R, 14 мм) латки звідти давали слабкі привиди
+    літер. Якщо латок цілком у src_pref >= 200 — беруться лише вони."""
     H, W = synth.shape
     res = canvas.astype(np.float32) - field_c
     # Джерело — НЕ за гладкістю: paper_ok (розкид < 4 у вікні 1,5 мм) відсіює саме папір з
@@ -55,15 +62,22 @@ def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng, zero_mean=False,
     lw = np.array([0.299, 0.587, 0.114], np.float32)
     Lc = canvas.astype(np.float32) @ lw
     Lf = field_c @ lw
-    ink = (Lc < Lf - 18) & ~synth
+    blk = synth if src_block is None else src_block
+    ink = (Lc < Lf - 18) & ~blk
     dink = cv2.distanceTransform((~ink).astype(np.uint8), cv2.DIST_L2, 3)
-    src = ~synth & (np.abs(Lc - Lf) < 12) & (dink >= 3 * mm)
+    src = ~blk & (np.abs(Lc - Lf) < 12) & (dink >= 3 * mm)
     dsyn = cv2.distanceTransform((~synth).astype(np.uint8), cv2.DIST_L2, 3) / mm
     I = cv2.integral(src.astype(np.uint8))
     ys, xs = np.mgrid[0:H - P:8, 0:W - P:8]
     ys, xs = ys.ravel(), xs.ravel()
     full = (I[ys + P, xs + P] - I[ys, xs + P] - I[ys + P, xs] + I[ys, xs]) == P * P
     ys, xs = ys[full], xs[full]
+    n_all = int(len(ys))
+    if src_pref is not None and len(ys):
+        Ip = cv2.integral(src_pref.astype(np.uint8))
+        inp = (Ip[ys + P, xs + P] - Ip[ys, xs + P] - Ip[ys + P, xs] + Ip[ys, xs]) == P * P
+        if int(inp.sum()) >= 200:
+            ys, xs = ys[inp], xs[inp]
     if len(ys) < 20:
         return None, {"patches_src": int(len(ys))}
     cy, cx = ys + P // 2, xs + P // 2
@@ -100,7 +114,7 @@ def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng, zero_mean=False,
             stage["LRTB"[s]][st] += 1
             for _ in range(8):     # не брати латку, узяту для сусідньої клітини
                 j = int(cand[rng.integers(len(cand))])
-                if not any(abs(ys[j] - uy) < P and abs(xs[j] - ux) < P for uy, ux in used[-6:]):
+                if not any(abs(ys[j] - uy) < P and abs(xs[j] - ux) < P for uy, ux in used[-6:]) and                         (src_block is None or abs(ys[j] - ty) >= P or abs(xs[j] - tx) >= P):
                     break
             used.append((ys[j], xs[j]))
             pr = res[ys[j]:ys[j] + P, xs[j]:xs[j] + P]
@@ -112,5 +126,5 @@ def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng, zero_mean=False,
     # ділення на корінь суми квадратів ваг: розкид незалежних латок однаковий за будь-якого
     # перекриття (і біля краю полотна, де сусідньої латки немає — там це просто одна латка)
     fill = (field_c if dest_field is None else dest_field) + acc / np.sqrt(np.maximum(w2, 1e-6))[..., None]
-    return fill, {"patches_src": int(len(ys)), "patches_placed": placed,
+    return fill, {"patches_src": int(len(ys)), "patches_src_all": n_all, "patches_placed": placed,
                   "stage": {k: v for k, v in stage.items() if sum(v)}}

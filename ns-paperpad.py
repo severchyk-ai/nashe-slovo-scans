@@ -293,6 +293,52 @@ def grow_irregular(synth, clean, near, skip_sides, mm, rng):
     return synth | grow
 
 
+def ramp_alpha(canvas, synth, base, near, forced, pd, mm, ramp_mm, edge_mm):
+    """Плавний шов (оператор 01.10.2026: «перехід значно-значно плавніший»). Повертає s1 (що замінити
+    цілком), al (частка доданого 0..1 для кожного пікселя) і числа для звіту.
+      * s1 = доданий + смужка edge_mm справжнього паперу вздовж шва: сам край аркуша (обріз, тінь, світла
+        лінія) лишився б видним за будь-якого змішування. Смужка не береться, де ближче 1,5 мм є чорнило
+        ГЛИБШЕ за неї (друк навиліт сягає вглиб і так себе видає), і на боках, де найближчий друк < 3 мм.
+      * далі частка доданого сходить з 1 до 0 на ramp_mm, а де чистого поля менше — на стільки, скільки
+        є: al = min(1 − d/ramp, dN/(d + dN)), d — відстань від s1, dN — до зони 1,5 мм навколо чорнила
+        (будь-який канал темніший за поле на 22+: і чорний друк, і кольоровий). Перешкода — ЛИШЕ чорнило:
+        перша версія брала «нечистий» за clean_paper (гладкість), і рампа виходила 1,0-2,3 мм (мед), у
+        70-100 % шва коротша за 3 мм — просвіт звороту й цятки в полях рвали її. Рампа — smoothstep.
+      * боки зі словом оператора (forced) — без смужки й без рампи."""
+    H, W = synth.shape
+    Lc, Lb = luma(canvas), luma(base)
+    d0 = cv2.distanceTransform((~synth).astype(np.uint8), cv2.DIST_L2, 5)
+    ink_deep = ~synth & (Lc < Lb - 18) & (d0 > edge_mm * mm)
+    d_inkd = cv2.distanceTransform((~ink_deep).astype(np.uint8), cv2.DIST_L2, 5)
+    strip = ~synth & (d0 <= edge_mm * mm) & (d_inkd >= 1.5 * mm)
+    off = np.zeros((H, W), bool)
+    for k, s in enumerate("LRTB"):
+        if s in forced:
+            off |= near == k
+        elif pd[s][1] < 3.0:
+            strip &= near != k
+    strip &= ~off
+    s1 = synth | strip
+    inkp = ~s1 & (canvas.astype(np.float32) < base - 22).any(axis=2)
+    d_inkp = cv2.distanceTransform((~inkp).astype(np.uint8), cv2.DIST_L2, 5)
+    d1 = cv2.distanceTransform((~s1).astype(np.uint8), cv2.DIST_L2, 5)
+    dn = np.maximum(0, d_inkp - 1.5 * mm)
+    al = np.clip(np.minimum(1 - d1 / (ramp_mm * mm), dn / np.maximum(d1 + dn, 1e-3)), 0, 1)
+    al[off] = 0
+    al = al * al * (3 - 2 * al)
+    al[s1] = 1
+    info = {}
+    seam_px = ~s1 & (d1 <= 1.5)
+    for k, s in enumerate("LRTB"):
+        m = seam_px & (near == k) & ~off
+        if m.sum() >= 300:
+            r = np.minimum(ramp_mm, dn[m] / mm)
+            info[s] = {"ramp_med_mm": round(float(np.median(r)), 2), "ramp_p10_mm": round(float(np.percentile(r, 10)), 2),
+                       "under_3mm_pct": round(100.0 * float((r < 3).mean()), 1),
+                       "strip_pct": round(100.0 * float((strip & (near == k)).sum()) / max(1, int((~synth & (d0 <= edge_mm * mm) & (near == k)).sum())), 1)}
+    return s1, al.astype(np.float32), info
+
+
 def seam_metrics(canvas, synth, paper_ok, dpi):
     """По боках: додане в 2 мм від справжнього проти справжнього паперу в 2 мм від доданого."""
     mm = dpi / 25.4
@@ -358,13 +404,25 @@ def main():
         Lp = L0.copy()
         Lp[synth0] = P
         pd = print_dist(Lp, dpi, P)
+        # cut_mm (job, на сторінку), напр. {"R": 7}: ПРЯМИЙ зріз боку на всю довжину — сліди зшивання на
+        # корінці (тканина, клей, здертий шар: 2316/10 R). Оператор 01.10.2026: «просто обрізати, щоб
+        # відцентрувати сторінку, але рамка має бути рівною» — нерівну межу здертого шару не обводити,
+        # доданий папір має стикуватися вже з чистим. Не ближче 1,5 мм до найближчого друку.
+        for s, cmm in (p.get("cut_mm") or {}).items():
+            c_px = min(float(cmm), max(0.0, pd[s][1] - 1.5)) * mm
+            depths[s] = np.maximum(depths[s], c_px).astype(np.float32)
+            drep[s]["cut_mm"] = round(c_px / mm, 2)
+        if p.get("cut_mm"):
+            synth0 = wedge | band_mask(L0.shape, depths)
+            Lp = L0.copy()
+            Lp[synth0] = P
+            pd = print_dist(Lp, dpi, P)
         # бік зі словом оператора (page_edge) — вікно цілі його НЕ зрізає: «найближчий друк» = 1,5 мм,
         # тож дозволений зріз там 0, а центрування доповнює з інших боків (2288/7: зведення висоти
         # по «чистому полю» зрізало червону ручку «Дати репліку!» — її детектор друку не бачить)
         for s in forced:
             pd[s] = (pd[s][0], min(pd[s][1], 1.5))
         pages.append(dict(name=p["name"], out=p["out"], img=img, synth0=synth0, P=P, forced=sorted(forced),
-                          seam_keep=list(p.get("seam_keep", [])),
                           dirt=drep, pd=pd, w=W0, h=H0, land=W0 > H0,
                           wedge_px=int(wedge.sum()), dirt_px=int((synth0 & ~wedge).sum())))
     report = {"dpi": dpi, "frame_px": fm, "center_v": center_v, "pages": []}
@@ -465,15 +523,60 @@ def main():
                     # проба 01.10.2026, job "seam": 1 — латки без власного середнього + тон доданого біля шва
                     # з місцевого паперу (seam_tone); 2 — ще й нерівна межа з розчиненням (grow_irregular)
                     seam_mode = int(job.get("seam", 0))
+                    wmask = None
                     if seam_mode == 0:
                         qf, qinfo = pg.quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng)
+                    elif seam_mode >= 3:
+                        s1, al, rinfo = ramp_alpha(canvas, synth, field_c, near, q["forced"], q["pd"], mm,
+                                                   float(job.get("ramp_mm", 5.0)), float(job.get("edge_mm", 0.75)))
+                        zone = al > 0.01
+                        dest = field_c + seam_tone(canvas, s1, paper_ok, field_c, mm)
+                        # джерело латок — поля сторінки (поза блоком друку з запасом 1 мм)
+                        mb = {s: max(0, int((pd[s][0] + rec["pad_mm"][s] - 1.0) * mm)) for s in "LRTB"}
+                        marg = np.ones((th, tw), bool)
+                        marg[mb["T"]:th - mb["B"], mb["L"]:tw - mb["R"]] = False
+                        qf, qinfo = pg.quilt_fill(canvas, zone, paper_ok, field_c, near, mm, rng,
+                                                  zero_mean=True, dest_field=dest, src_block=s1, src_pref=marg)
+                        qinfo["seam"] = seam_mode
+                        qinfo["ramp"] = rinfo
+                        if qf is not None:
+                            # у рампі тон і зерно змішуються окремо; зерно — з діленням на корінь суми квадратів
+                            # ваг (два незалежні зерна в сумі 50/50 дали б смугу вдвічі меншого розкиду)
+                            cf = canvas.astype(np.float32)
+                            wr = (known & ~s1).astype(np.float32)
+                            sg = 0.7 * mm
+                            tr = cv2.GaussianBlur(cf * wr[..., None], (0, 0), sg) / np.maximum(cv2.GaussianBlur(wr, (0, 0), sg), 1e-3)[..., None]
+                            a3 = al[..., None]
+                            rz = zone & ~s1
+                            # зерно латок слабше за місцевий папір (джерело — найчистіші місця; 2277/7 згори на JPEG
+                            # розкид рядка 1,3 проти 1,6): підсилити до розкиду справжнього паперу в рампі того ж
+                            # боку, але не більше x1,35 і ніколи не послаблювати
+                            res_f = qf - dest
+                            hr = np.where(s1, luma(dest), luma(cf))
+                            hr = hr - cv2.GaussianBlur(hr, (0, 0), 4)
+                            hf = luma(res_f)
+                            hf = hf - cv2.GaussianBlur(hf, (0, 0), 4)
+                            d_s1 = cv2.distanceTransform((~s1).astype(np.uint8), cv2.DIST_L2, 3)
+                            gains = {}
+                            for k, sname in enumerate("LRTB"):
+                                mr = rz & (near == k) & (d_s1 > 0.5 * mm)
+                                mf = s1 & (near == k)
+                                if mr.sum() >= 5000 and mf.sum() >= 2000:
+                                    g = float(np.clip(hr[mr].std() / max(1e-3, hf[mf].std()), 1.0, 1.35))
+                                    res_f[near == k] *= g
+                                    gains[sname] = [round(float(hr[mr].std()), 2), round(float(hf[mf].std()), 2), round(g, 2)]
+                            qinfo["grain_gain"] = gains
+                            qf = dest + res_f
+                            mixv = a3 * dest + (1 - a3) * tr + (a3 * res_f + (1 - a3) * (cf - tr)) / np.sqrt(a3 * a3 + (1 - a3) ** 2)
+                            qf[rz] = mixv[rz]
+                            qinfo["touched_mm2"] = round(float(rz.sum()) / mm / mm)
+                            wmask = zone
+                            synth = s1 | (al >= 0.5)
                     else:
                         syn_q = synth
                         if seam_mode >= 2:
                             clean = clean_paper(canvas, synth, field_c, mm, 1.5)
-                            # seam_keep (job, на сторінку): боки, де межу не чіпати — 2316/10 R, оператор 01.10:
-                            # «лишити правдиву деформацію краю» корінця
-                            keep = set(q["forced"]) | set(q["seam_keep"])
+                            keep = set(q["forced"])      # слово оператора (page_edge): межу там не чіпати
                             syn_q = grow_irregular(synth, clean, near, ["LRTB".index(s) for s in keep], mm, rng)
                         dest = field_c + seam_tone(canvas, syn_q, paper_ok, field_c, mm)
                         qf, qinfo = pg.quilt_fill(canvas, syn_q, paper_ok, field_c, near, mm, rng,
@@ -493,8 +596,10 @@ def main():
                     if qf is not None:
                         fill = np.clip(qf, 0, 255).astype(np.uint8)
                 # перенесений друк: у доданому пікселі на 30+ темніші за тон поля (має бути ~0)
-                rec["synth_dark_px"] = int(((luma(fill) < luma(field) - 30) & synth).sum())
-                canvas[synth] = fill[synth]
+                if wmask is None:
+                    wmask = synth
+                rec["synth_dark_px"] = int(((luma(fill) < luma(field) - 30) & wmask).sum())
+                canvas[wmask] = fill[wmask]
                 rec["grain_sd"] = [round(float(v), 2) for v in sd]
                 rec["grain_rho"] = round(rho, 2)
                 rec["seam"] = seam_metrics(canvas, synth, paper_ok, dpi)
