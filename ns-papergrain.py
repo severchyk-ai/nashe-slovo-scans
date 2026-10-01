@@ -38,9 +38,13 @@ def _weights():
     return np.outer(w, w)
 
 
-def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng):
+def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng, zero_mean=False, dest_field=None):
     """canvas uint8 HxWx3 (справжнє на місці), synth — що заповнити, paper_ok — чистий
-    справжній папір, field_c — тон 3-80 мм, near — найближчий бік (0 L 1 R 2 T 3 B)."""
+    справжній папір, field_c — тон 3-80 мм, near — найближчий бік (0 L 1 R 2 T 3 B).
+    zero_mean — з кожної латки зняти її власне середнє (01.10.2026): джерело — найчистіший папір,
+    він світліший за поле, яке усереднює й цятки з просвітом (2277/7 L: доданий на +0,4…+0,7 L*
+    світліший за папір 2-4 мм від шва); тон тоді несе лише поле. dest_field — тон місця
+    призначення, якщо не field_c (підгонка до місцевого паперу біля шва, ns-paperpad seam_tone)."""
     H, W = synth.shape
     res = canvas.astype(np.float32) - field_c
     # Джерело — НЕ за гладкістю: paper_ok (розкид < 4 у вікні 1,5 мм) відсіює саме папір з
@@ -99,11 +103,14 @@ def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng):
                 if not any(abs(ys[j] - uy) < P and abs(xs[j] - ux) < P for uy, ux in used[-6:]):
                     break
             used.append((ys[j], xs[j]))
-            acc[ty:ty + P, tx:tx + P] += res[ys[j]:ys[j] + P, xs[j]:xs[j] + P] * wgt[..., None]
+            pr = res[ys[j]:ys[j] + P, xs[j]:xs[j] + P]
+            if zero_mean:
+                pr = pr - pr.mean(axis=(0, 1))
+            acc[ty:ty + P, tx:tx + P] += pr * wgt[..., None]
             w2[ty:ty + P, tx:tx + P] += wgt * wgt
             placed += 1
     # ділення на корінь суми квадратів ваг: розкид незалежних латок однаковий за будь-якого
     # перекриття (і біля краю полотна, де сусідньої латки немає — там це просто одна латка)
-    fill = field_c + acc / np.sqrt(np.maximum(w2, 1e-6))[..., None]
+    fill = (field_c if dest_field is None else dest_field) + acc / np.sqrt(np.maximum(w2, 1e-6))[..., None]
     return fill, {"patches_src": int(len(ys)), "patches_placed": placed,
                   "stage": {k: v for k, v in stage.items() if sum(v)}}

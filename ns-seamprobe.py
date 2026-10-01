@@ -80,6 +80,25 @@ def seg_color(lab, ma, mb, side, H, W):
     return out
 
 
+def step_color(lab, ma, mb, side, H, W, nseg=40):
+    """Сходинка тону між двома вузькими смугами (стик): по 40 відрізках уздовж боку,
+    |dL*|, |da*|, |db*| — медіана й найбільше; dL* ще й зі знаком (медіана)."""
+    n = H if side in "LR" else W
+    rows = []
+    for seg in np.array_split(np.arange(n), nseg):
+        sl = (slice(seg[0], seg[-1] + 1), slice(None)) if side in "LR" else (slice(None), slice(seg[0], seg[-1] + 1))
+        a, b = ma[sl], mb[sl]
+        if a.sum() > 150 and b.sum() > 150:
+            rows.append(lab[sl][a].mean(axis=0) - lab[sl][b].mean(axis=0))
+    if len(rows) < 3:
+        return None
+    d = np.abs(np.array(rows))
+    return {"segs": len(rows), "dL": [round(float(np.median(d[:, 0])), 2), round(float(d[:, 0].max()), 2)],
+            "dL_signed": round(float(np.median(np.array(rows)[:, 0])), 2),
+            "da": [round(float(np.median(d[:, 1])), 2), round(float(d[:, 1].max()), 2)],
+            "db": [round(float(np.median(d[:, 2])), 2), round(float(d[:, 2].max()), 2)]}
+
+
 def band_power(tiles, dpi):
     """Середня потужність у смугах періоду для набору плиток L* (N x T x T)."""
     if len(tiles) == 0:
@@ -193,6 +212,16 @@ def main():
             r["grain_seam_log2"] = [round(float(np.log2(pw["A"][i] / pw["B"][i])), 2) for i in range(len(BANDS_MM))]
         if pw["C"] is not None and pw["B"] is not None:
             r["grain_ctrl_log2"] = [round(float(np.log2(pw["C"][i] / pw["B"][i])), 2) for i in range(len(BANDS_MM))]
+        # СТИК (01.10.2026, оператор: «світліша рівна смуга вздовж шва»): доданий проти чистого справжнього
+        # у смугах 0-1 і 1-3 мм по обидва боки шва; контроль — сусідні смуги самого справжнього паперу
+        rc = real & paper & (d_ink >= 1.0 * mm) & side
+        sy = synth & paper & side
+        dr, ds = d_to_real / mm, d_to_syn / mm
+        r["step"] = {
+            "seam01": step_color(lab, sy & (dr <= 1), rc & (ds <= 1), s, H, W),
+            "ctrl01": step_color(lab, rc & (ds > 1) & (ds <= 2), rc & (ds > 2) & (ds <= 3), s, H, W),
+            "seam13": step_color(lab, sy & (dr > 1) & (dr <= 3), rc & (ds > 1) & (ds <= 3), s, H, W),
+            "ctrl13": step_color(lab, rc & (ds > 1) & (ds <= 3), rc & (ds > 3) & (ds <= 5), s, H, W)}
         r["clean_by_dist"] = {}
         for g in DIST_LABELS:
             tl = byd[s][g]
@@ -216,6 +245,12 @@ def main():
                     (c["dL"][0], c["dL"][1], c["da"][0], c["da"][1], c["db"][0], c["db"][1], c["dE"][0], c["dE"][1])) if c else "колір —"
             gtxt = ("зерно " + " ".join("%+.2f" % v for v in g)) if g else "зерно —"
             print("    %s %s | %s" % (nm, ctxt, gtxt))
+        for key, nm in (("seam01", "стик 0-1 мм: доданий | справжній "), ("ctrl01", "  контроль: справжній 1-2 | 2-3 мм"),
+                        ("seam13", "стик 1-3 мм: доданий | справжній "), ("ctrl13", "  контроль: справжній 1-3 | 3-5 мм")):
+            v = r["step"][key]
+            if v:
+                print("    %s |dL*| %.2f/%.2f (зі знаком %+.2f)  |da*| %.2f/%.2f  |db*| %.2f/%.2f  [%d відр.]"
+                      % (nm, v["dL"][0], v["dL"][1], v["dL_signed"], v["da"][0], v["da"][1], v["db"][0], v["db"][1], v["segs"]))
         few = "  — МАЛО плиток доданого (%d < 200), не висновок" % r["tiles"]["A"] if r["tiles"]["A"] < 200 else ""
         for g, v in r["clean_by_dist"].items():
             print("    доданий / чистий папір %5s мм від шва (%5d плиток): зерно %s   (крупна смуга: %.0f проти %.0f)%s"

@@ -248,6 +248,51 @@ def nearest_side(H, W):
     return np.where(dx <= dy, sx, sy)
 
 
+def clean_paper(canvas, synth, base, mm, ink_mm):
+    """Чистий справжній папір аж до самого шва. paper_ok для цього не годиться: розкид рахується
+    по полотну, де доданий ще чорний (0), і в ~1,3 мм від шва папір «не гладкий» — перша проба
+    seam_tone через це не мала жодного пікселя (2277/7 B: сходинка +1,02 -> +0,73 лише від
+    zero_mean). Тут доданий на час виміру замінено тоном поля. Умови: гладко (розкид < 4 після
+    розмиття 0,5 мм у вікні 1,5 мм), у межах 12 від поля, не ближче ink_mm до чорнила (поле − 18)."""
+    Lc, Lb = luma(canvas), luma(base)
+    Ls = cv2.GaussianBlur(np.where(synth, Lb, Lc), (0, 0), 0.5 * mm)
+    kk = int(1.5 * mm) | 1
+    sdb = np.sqrt(np.maximum(0, cv2.blur(Ls * Ls, (kk, kk)) - cv2.blur(Ls, (kk, kk)) ** 2))
+    ink = ~synth & (Lc < Lb - 18)
+    d_ink = cv2.distanceTransform((~ink).astype(np.uint8), cv2.DIST_L2, 3)
+    return ~synth & (sdb < 4) & (np.abs(Lc - Lb) < 12) & (d_ink >= ink_mm * mm)
+
+
+def seam_tone(canvas, synth, paper_ok, base, mm):
+    """Перехід на шві (оператор 01.10.2026: «світліша рівна смуга вздовж шва»). Справжній папір
+    в останніх 1-2 мм перед швом має свій тон (тінь краю: 2277/7 B −0,9 L*, 2278/4 R −1,3 проти
+    паперу 2-4 мм углиб), а поле 3 мм його не бачить — на шві сходинка. Тут: відхилення чистого
+    паперу в 1 мм від шва від поля base, усереднене вздовж шва (σ 1,5 мм), продовжується в
+    доданий і згасає на ~3 мм. Де біля шва чистого паперу немає (друк) — нуль."""
+    d_syn = cv2.distanceTransform((~synth).astype(np.uint8), cv2.DIST_L2, 3)
+    d_real = cv2.distanceTransform(synth.astype(np.uint8), cv2.DIST_L2, 3)
+    w = (clean_paper(canvas, synth, base, mm, 0.75) & (d_syn <= 1.0 * mm)).astype(np.float32)
+    sig = 1.5 * mm
+    num = cv2.GaussianBlur((canvas.astype(np.float32) - base) * w[..., None], (0, 0), sig)
+    den = cv2.GaussianBlur(w, (0, 0), sig)
+    return num / (den + 0.005)[..., None] * np.exp(-d_real / (3.0 * mm))[..., None]
+
+
+def grow_irregular(synth, clean, near, skip_sides, mm, rng):
+    """Нерівна межа: доданий заходить у ЧИСТИЙ справжній папір на 0,2-1,2 мм (глибина — плавний
+    шум, σ 0,8 мм), щоб шов не був прямою лінією. Лише clean (папір тону поля, не ближче 1,5 мм
+    до чорнила); боки зі словом оператора (skip_sides) не чіпаються."""
+    H, W = synth.shape
+    d_syn = cv2.distanceTransform((~synth).astype(np.uint8), cv2.DIST_L2, 3)
+    n = cv2.GaussianBlur(rng.normal(0, 1, (H, W)).astype(np.float32), (0, 0), 0.8 * mm)
+    n /= max(1e-6, float(n.std()))
+    depth = (0.2 + 1.0 * np.clip(0.5 + 0.35 * n, 0, 1)) * mm
+    grow = ~synth & (d_syn <= depth) & clean
+    for k in skip_sides:
+        grow &= near != k
+    return synth | grow
+
+
 def seam_metrics(canvas, synth, paper_ok, dpi):
     """По боках: додане в 2 мм від справжнього проти справжнього паперу в 2 мм від доданого."""
     mm = dpi / 25.4
@@ -319,6 +364,7 @@ def main():
         for s in forced:
             pd[s] = (pd[s][0], min(pd[s][1], 1.5))
         pages.append(dict(name=p["name"], out=p["out"], img=img, synth0=synth0, P=P, forced=sorted(forced),
+                          seam_keep=list(p.get("seam_keep", [])),
                           dirt=drep, pd=pd, w=W0, h=H0, land=W0 > H0,
                           wedge_px=int(wedge.sum()), dirt_px=int((synth0 & ~wedge).sum())))
     report = {"dpi": dpi, "frame_px": fm, "center_v": center_v, "pages": []}
@@ -416,7 +462,33 @@ def main():
                     pg = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(pg)
                     field_c = paper_field(canvas, paper_w, mm, q["P"], scales=(3.0, 8.0, 25.0, 80.0))
-                    qf, qinfo = pg.quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng)
+                    # проба 01.10.2026, job "seam": 1 — латки без власного середнього + тон доданого біля шва
+                    # з місцевого паперу (seam_tone); 2 — ще й нерівна межа з розчиненням (grow_irregular)
+                    seam_mode = int(job.get("seam", 0))
+                    if seam_mode == 0:
+                        qf, qinfo = pg.quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng)
+                    else:
+                        syn_q = synth
+                        if seam_mode >= 2:
+                            clean = clean_paper(canvas, synth, field_c, mm, 1.5)
+                            # seam_keep (job, на сторінку): боки, де межу не чіпати — 2316/10 R, оператор 01.10:
+                            # «лишити правдиву деформацію краю» корінця
+                            keep = set(q["forced"]) | set(q["seam_keep"])
+                            syn_q = grow_irregular(synth, clean, near, ["LRTB".index(s) for s in keep], mm, rng)
+                        dest = field_c + seam_tone(canvas, syn_q, paper_ok, field_c, mm)
+                        qf, qinfo = pg.quilt_fill(canvas, syn_q, paper_ok, field_c, near, mm, rng,
+                                                  zero_mean=True, dest_field=dest)
+                        qinfo["seam"] = seam_mode
+                        if qf is not None and seam_mode >= 2:
+                            # розчинення: на 2-3 пікс. по обидва боки нової межі справжній чистий папір і латка
+                            # змішуються (лише там, де справжній піксель чистий); далі synth = розширена маска
+                            al = cv2.GaussianBlur(syn_q.astype(np.float32), (0, 0), 1.5)
+                            mix = known & clean & (al > 0.02)
+                            for s in keep:
+                                mix &= near != "LRTB".index(s)
+                            qf[mix] = al[mix][:, None] * qf[mix] + (1 - al[mix])[:, None] * canvas[mix].astype(np.float32)
+                            qinfo["grown_px"] = int((syn_q & ~synth).sum())
+                            synth = syn_q | mix
                     rec["grain_patch"] = qinfo
                     if qf is not None:
                         fill = np.clip(qf, 0, 255).astype(np.uint8)

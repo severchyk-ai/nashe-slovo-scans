@@ -38,6 +38,7 @@ param(
     [switch]$CenterV,             # з -PaperPad: центрувати друк і по висоті (за умовчанням поля верх/низ міняються порівну)
     [string]$PadMaskDir = "",     # з -PaperPad: сюди маски доданого паперу pNN_synth.png (мірило шва ns-seamprobe.py)
     [string]$PadGrain = "",       # з -PaperPad: "patch" — зерно латками справжнього паперу (ns-papergrain.py, проба 30.09); порожньо — шум
+    [int]$PadSeam = 0,            # з -PadGrain patch, проба 01.10: 1 — тон доданого біля шва з місцевого паперу; 2 — ще й нерівна межа з розчиненням; 0 — як було
     [switch]$KeepTmp              # не прибирати тимчасову теку (PNG після балансу, _paperpad_job.json, pNN_pp.png до JPEG) — лише для дослідів
 )
 # Стиснення до медіани номера — стандарт з 21.09.2026 (оператор: «виглядає
@@ -435,6 +436,7 @@ if ($PaperPad) {
     $ppJob = [ordered]@{ dpi = $Dpi; frame_px = $fm; frame_tone = $FrameTone; center_v = [bool]$CenterV; seed = $Seq
                          report = (Join-Path $render "_paperpad.json"); pages = @() }
     if ($PadGrain) { $ppJob.grain = $PadGrain }
+    if ($PadSeam -gt 0) { $ppJob.seam = $PadSeam }
     if ($PadMaskDir) { New-Item -ItemType Directory -Path $PadMaskDir -Force | Out-Null; $ppJob.mask_dir = $PadMaskDir }
     # Бік page_edge, який записав ns-prepare із заміру ниток (той самий знак у prepare.json, edge_source
     # ns-spinescan), — не вказівка оператора: бруд за ним дорізається (2278/4 справа — нитки лишились).
