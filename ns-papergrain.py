@@ -22,6 +22,8 @@ ns-seamprobe.py на відтвореному зразку: потужність
     не падає (звичайне середнє дало б сітку тьмяніших смуг).
 Нічого не пише; повертає заповнення (float32 H x W x 3) для пікселів synth.
 """
+import ns_modcheck
+ns_modcheck.need("cv2")      # Windows часом блокує OpenCV — ясна зупинка (код 42), не падіння
 import cv2
 import numpy as np
 

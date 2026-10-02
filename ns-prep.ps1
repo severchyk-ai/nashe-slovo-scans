@@ -39,6 +39,12 @@ if (-not $issueDir) { Write-Host "Номер $Seq не знайдено в ка�
 $man = Read-NsManifest -IssueDir $issueDir
 if (@($man.pages).Count -eq 0) { Write-Host "У номері $Seq немає сторінок." -ForegroundColor Red; exit 1 }
 
+# Заростання дірок (ns-inpaint.py, ns-holeat.py) потребує OpenCV, який Windows часом блокує:
+# перевірити ДО роботи, а не лишити дірки мовчки (02.10.2026).
+$needCv = $FillHoles -or $FillAt -or $FillThreadsPages
+foreach ($fld in @('fill_holes', 'fill_at', 'fill_threads_pages')) { if ($man.PSObject.Properties.Name -contains $fld -and $man.$fld) { $needCv = $true } }
+if ($needCv -and -not (Test-NsPyModules -For "prep номера $Seq (заростання дірок)")) { exit $script:NS_EXIT_BLOCKED }
+
 # --- майстри мають бути цілими ДО початку ----------------------------------
 foreach ($p in $man.pages) {
     if (-not (Test-NsPageDurable -IssueDir $issueDir -PageEntry $p)) {
@@ -350,6 +356,7 @@ foreach ($p in ($man.pages | Sort-Object { [int]$_.n })) {
                            "--dump", (Join-Path $hd ("p{0:D2}_at_{1}{2}_in.png" -f [int]$p.n, $fs, $fAlong)))
                 if ($fillColor -match '^rgb\(') { $fArgs += @("--paper", $fillColor) }
                 $fo = & python (Join-Path $PSScriptRoot "ns-holeat.py") @fArgs 2>&1
+                Stop-NsIfBlocked -What "номер $Seq (заростання дірки за вказівкою, стор. $($p.n))"
                 [IO.File]::WriteAllLines((Join-Path $hd ("p{0:D2}_at_{1}{2}_log.txt" -f [int]$p.n, $fs, $fAlong)), [string[]]@($fo), (New-Object Text.UTF8Encoding $true))
                 $offL = @($fo | Where-Object { "$_" -match '^OFFSET (\d+) (\d+)$' })
                 if ($offL.Count -gt 0 -and (Test-Path $fwin) -and "$($offL[-1])" -match '^OFFSET (\d+) (\d+)$') {

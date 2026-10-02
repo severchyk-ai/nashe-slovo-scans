@@ -96,6 +96,39 @@ function Initialize-NsConsole {
     } catch { }
 }
 
+$script:NS_EXIT_BLOCKED = 42
+
+function Test-NsPyModules {
+    <#  Чи вантажаться модулі Python, без яких крок не має сенсу (02.10.2026).
+        Smart App Control час від часу блокує OpenCV (cv2.pyd без підпису: 23.09,
+        28.09, 30.09, 01.10) — тоді скрипт падав посеред номера, а виклики з
+        `2>$null` мовчки йшли запасним шляхом (дірка не заростала, ручка не
+        маскувалась). Викликати НА ПОЧАТКУ скрипта, що вживає cv2, і перед
+        кожним номером у довгому прогоні. $false — уже надруковано «ЗУПИНКА: …»;
+        викликач робить exit $script:NS_EXIT_BLOCKED. Набір: img (numpy, PIL,
+        cv2) або ocr (+ pikepdf, img2pdf, ocrmypdf). НЕ обходити блокування.   #>
+    param([string]$Set = "img", [string]$For = "роботу")
+    $env:PYTHONIOENCODING = "utf-8"
+    $mo = @(& python (Join-Path $PSScriptRoot "ns_modcheck.py") $Set "--what" $For 2>&1 | ForEach-Object { "$_" })
+    if ($LASTEXITCODE -eq 0) { return $true }
+    foreach ($l in $mo) { Write-Host $l -ForegroundColor Red }
+    if (-not (($mo -join " ") -match 'ЗУПИНКА')) {
+        Write-Host "ЗУПИНКА: перевірка модулів Python не відпрацювала (код $LASTEXITCODE) — $For не виконано." -ForegroundColor Red
+    }
+    return $false
+}
+
+function Stop-NsIfBlocked {
+    <#  Одразу після виклику python-скрипта з cv2: код 42 = модуль заблоковано
+        посеред роботи (ns_modcheck.need) — зупинити все з ясним рядком, а не
+        йти далі запасним шляхом.                                             #>
+    param([string]$What)
+    if ($LASTEXITCODE -eq $script:NS_EXIT_BLOCKED) {
+        Write-Host "ЗУПИНКА: OpenCV заблоковано Windows (Smart App Control) — $What не зроблено. Не обходити; сказати оператору." -ForegroundColor Red
+        exit $script:NS_EXIT_BLOCKED
+    }
+}
+
 function Test-NsTools {
     <#  Перевірити наявність лише тих інструментів, які потрібні цьому етапу.
         Сканування не має падати через відсутній OCR — це різні етапи.
@@ -500,6 +533,7 @@ function New-NsOcrGray {
         # гаситься. Збій скрипта — сіра копія без змін.
         $script:NS_LAST_PEN = ""
         $penOut = & python "$PSScriptRoot\ns-penmask.py" $Src "$T\pen.png" 2>$null
+        Stop-NsIfBlocked -What "маску червоної ручки для OCR ($Src)"
         if ($LASTEXITCODE -eq 0 -and (Test-Path "$T\pen.png") -and "$penOut" -match 'зон ручки (\d+); маска \d+ px = (\d+)' -and [int]$Matches[1] -gt 0) {
             $script:NS_LAST_PEN = "{0} зон, {1} мм2" -f $Matches[1], $Matches[2]
             & magick "$T\g.png" `( $Src -alpha off -channel R -separate +channel `) "$T\pen.png" -alpha off -composite "$T\g_pen.png" 2>$null
@@ -1688,6 +1722,12 @@ $script:NS_SPINE_RULES = @{
     # неї лишається 4,2-6,1 мм уздовж краю (2318, усі сторінки) — тому межа 4:
     # посередині між 2,9 і 4,5. З межею 5 на 2318/10 лишилася дірка 4,2x4,5.
     2002 = @{ CleanMm = 8.0; HoleMaxMm = 12.5; FillHoles = $false; ZoneMm = 16.0; BigMinMm = 4.0 }
+    # 2003 — рядка НЕМАЄ навмисно (замір 02.10.2026, ns-spinescan на prep -NoEdgeClean): великих дірок
+    # від зшивача, як у 2002 (7,6 x 6,5 мм на 2,9-10,5 мм углиб), немає; лише нитки, як у 2001:
+    #   2370 — 138 плям, далекий край мед 3,2 / 90 % 4,5 / макс 7,6 мм; 2371 — 99, 3,8 / 5,4 / 7,1;
+    #   2380 — 106, 3,7 / 4,7 / 6,8. На 2371 ще 12 видовжених плям 3,0-4,0 x 4,2-13,5 мм на 0-7,3 мм —
+    #   це вирвані до краю дірки від нитки (очима, 2371/5), не зшивач: їх бере зріз корінця.
+    # Тож 2003 іде як 2001: ns-prepare міряє нитки КОЖНОГО номера і пише page_edge (зрізи 4-8,5 мм).
 }
 
 function Get-NsSpineRule {
@@ -1994,6 +2034,7 @@ function Repair-NsHoles {
         # auto (24.09.2026, оператор): дірка в папері — тоном і зерном паперу
         # довкола неї; у плашці чи орнаменті (паперу в кільці < 60 %) — fsr
         $ipOut = & python (Join-Path $PSScriptRoot "ns-inpaint.py") $strip "$T\m.png" $fixed "auto" 10 2>$null
+        Stop-NsIfBlocked -What "заростання дірок ($Path)"
         $log += "inpaint: " + (@($ipOut) -join " ")
         if (-not (Test-Path $fixed)) { return 0 }
         # аркуш «до і після» на кожну заповнену пляму — для перегляду оператором

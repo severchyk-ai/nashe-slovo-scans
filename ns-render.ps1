@@ -49,6 +49,8 @@ $FitScale = -not $NoFitScale
 Initialize-NsConsole
 
 if (-not (Test-NsTools -Need scan)) { Write-Host "Бракує інструментів." -ForegroundColor Red; exit 1 }
+# -PaperPad — це ns-paperpad.py з OpenCV; Windows часом його блокує: сказати ДО проходу 1 (02.10.2026)
+if ($PaperPad -and -not (Test-NsPyModules -For "render номера $Seq")) { exit $script:NS_EXIT_BLOCKED }
 
 $prep = Join-Path (Join-Path $script:NS_WORK "$Seq") "prep"
 if (-not (Test-Path $prep)) { Write-Host "Немає етапу prep для $Seq. Спершу ns-prep.ps1." -ForegroundColor Red; exit 1 }
@@ -485,6 +487,7 @@ if ($PaperPad) {
     $jobFile = Join-Path $tmp "_paperpad_job.json"
     [IO.File]::WriteAllText($jobFile, ($ppJob | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
     & python "$PSScriptRoot\ns-paperpad.py" $jobFile | ForEach-Object { Write-Host "  $_" }
+    Stop-NsIfBlocked -What "render номера $Seq (доповнення папером)"
     if ($LASTEXITCODE -ne 0) { Write-Host "  ЗБІЙ ns-paperpad.py (код $LASTEXITCODE)" -ForegroundColor Red; exit 1 }
     foreach ($p in $pages) { $p.Path = Join-Path $tmp ($p.Name + "_pp.png"); $p.CX = 0; $p.CY = 0 }
 }

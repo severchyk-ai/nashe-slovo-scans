@@ -52,7 +52,7 @@ if ($All) {
     $targets = @($Seq)
 }
 
-$done = @(); $failed = @()
+$done = @(); $failed = @(); $blocked = $false
 
 foreach ($s in $targets) {
     Write-Host ""
@@ -76,10 +76,18 @@ foreach ($s in $targets) {
         if ($NoOcr -and $stage.script -eq "ns-build.ps1") { $callArgs.NoOcr = $true }
         & "$PSScriptRoot\$($stage.script)" @callArgs
         if ($LASTEXITCODE -ne 0) {
+            if ($LASTEXITCODE -eq $script:NS_EXIT_BLOCKED) { $blocked = $true }
             Write-Host "Етап «$($stage.name)» завершився помилкою на номері $s." -ForegroundColor Red
             $ok = $false
             break
         }
+    }
+    # OpenCV заблоковано Windows (код 42 від етапу): решта номерів упала б так само — зупинити весь прогін
+    if ($blocked) {
+        $failed += $s
+        $rest = @($targets | Where-Object { $done -notcontains $_ -and $failed -notcontains $_ })
+        Write-Host ("ЗУПИНКА: OpenCV заблоковано Windows (Smart App Control) — номер {0} НЕ ЗРОБЛЕНО; не починав: {1}. Не обходити; сказати оператору." -f $s, $(if ($rest.Count) { $rest -join ', ' } else { "—" })) -ForegroundColor Red
+        break
     }
 
     if ($ok) {
@@ -104,5 +112,5 @@ Write-Host ("=" * 74) -ForegroundColor DarkGray
 Write-Host ("Зібрано: {0}" -f $(if ($done.Count) { $done -join ', ' } else { "нічого" })) -ForegroundColor Green
 if ($failed.Count -gt 0) {
     Write-Host ("З помилкою: {0}" -f ($failed -join ', ')) -ForegroundColor Red
-    exit 1
+    exit $(if ($blocked) { $script:NS_EXIT_BLOCKED } else { 1 })
 }

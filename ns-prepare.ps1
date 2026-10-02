@@ -44,9 +44,14 @@ function Invoke-NsStep {
     $out = & $Path @Params 2>&1 | ForEach-Object { "$_" }
     foreach ($l in $out) { Add-Content -Path $logf -Value $l -Encoding UTF8 }
     $rc = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+    if ($rc -eq $script:NS_EXIT_BLOCKED) { Write-Log "ЗУПИНКА: OpenCV заблоковано Windows — номер $Seq НЕ ЗРОБЛЕНО (крок: $Name). Не обходити; сказати оператору." Red; exit $script:NS_EXIT_BLOCKED }
     if ($rc -ne 0) { Write-Log "    ЗБІЙ (код $rc): $Name — див. $logf" Red; exit 1 }
     return $out
 }
+
+# OpenCV потрібен заміру ниток, заростанню дірок і доповненню папером; Windows часом його блокує
+# (02.10.2026) — перевірити ДО 12-16 хвилин роботи, а не впасти посеред.
+if (-not (Test-NsPyModules -For "номер $Seq")) { Write-Log "ЗУПИНКА: OpenCV заблоковано Windows — номер $Seq НЕ ЗРОБЛЕНО." Red; exit $script:NS_EXIT_BLOCKED }
 
 Write-Log ("ПІДГОТОВКА {0} ({1}, {2} стор.)" -f $Seq, $man.date, @($man.pages).Count) White
 $rot = if ($man.PSObject.Properties.Name -contains 'page_rotate' -and $man.page_rotate) { [string]$man.page_rotate } else { "" }
@@ -78,6 +83,7 @@ if ($Edge) {
     $env:PYTHONIOENCODING = "utf-8"
     $so = & $py (Join-Path $PSScriptRoot "ns-spinescan.py") @sa 2>&1 | ForEach-Object { "$_" }
     foreach ($l in $so) { Add-Content -Path $logf -Value $l -Encoding UTF8 }
+    if ($LASTEXITCODE -eq $script:NS_EXIT_BLOCKED) { Write-Log "ЗУПИНКА: OpenCV заблоковано Windows — номер $Seq НЕ ЗРОБЛЕНО (замір ниток). Не обходити; сказати оператору." Red; exit $script:NS_EXIT_BLOCKED }
     if (-not (Test-Path $spineJson)) { Write-Log "    замір не дав результату — див. $logf" Red; exit 1 }
     $sp = Get-Content $spineJson -Raw -Encoding UTF8 | ConvertFrom-Json
     $edge = [string]$sp.edge

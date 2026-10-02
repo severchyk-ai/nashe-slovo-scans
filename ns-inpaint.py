@@ -21,6 +21,9 @@ import sys
 import numpy as np
 from PIL import Image
 
+import ns_modcheck
+ns_modcheck.need("cv2")      # Windows часом блокує OpenCV — ясна зупинка (код 42), не падіння
+
 # кирилиця у виводі не має ламати скрипт під кодовою сторінкою 1252
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")

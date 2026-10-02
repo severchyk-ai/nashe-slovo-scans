@@ -26,6 +26,8 @@
 import argparse
 import sys
 
+import ns_modcheck
+ns_modcheck.need("cv2")      # Windows часом блокує OpenCV — ясна зупинка (код 42), не падіння
 import cv2
 import numpy as np
 from PIL import Image

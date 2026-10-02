@@ -1,0 +1,190 @@
+# requirements.lock — версії пакетів Python проєкту «Наше слово» і хеші їхніх DLL/PYD.
+# Записано 2026-10-02, Python 3.14.7. Пакети БЕЗ ПОТРЕБИ НЕ ОНОВЛЮВАТИ: Smart App Control вирішує за хешем
+# файлу, оновлений пакет — новий файл і новий вердикт. Звірка: python ns_modcheck.py --lock-check
+# Оновити запис (лише після свідомого оновлення пакета): python ns_modcheck.py --lock
+
+annotated-types==0.8.0
+cffi==2.1.1
+charset-normalizer==3.5.1
+cryptography==50.0.1
+defusedxml==0.7.1
+fonttools==4.65.0
+fpdf2==2.8.8
+ImageIO==2.37.4
+img2pdf==0.6.3
+lazy-loader==0.6
+lxml==6.1.3
+markdown-it-py==4.2.0
+mdurl==0.1.2
+networkx==3.7
+numpy==2.5.3
+ocrmypdf==17.11.0
+opencv-contrib-python==5.0.0.93
+packaging==26.3
+pdfminer.six==20260107
+pi_heif==1.4.0
+pikepdf==10.13.0.post1
+pillow==12.3.0
+pluggy==1.6.0
+pycparser==3.0
+pydantic==2.13.5
+pydantic_core==2.46.5
+Pygments==2.21.0
+pypdfium2==5.13.0
+rich==15.0.0
+scikit-image==0.26.0
+scipy==1.18.1
+tifffile==2026.9.20
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+uharfbuzz==0.56.1
+
+# хеші DLL/PYD пакетів: sha256, розмір у байтах, файл відносно site-packages
+# sha256 d8bd3032b72992a8166144a4063bae4a55c0f178d237454f17102301731e912a 7890432 PIL/_avif.cp314-win_amd64.pyd
+# sha256 d823c0e3b54035d08703bb427c553c956c2607b79395f2952e17a5447c5f1105 2627072 PIL/_imaging.cp314-win_amd64.pyd
+# sha256 dff90929dbeb9d51eebf09f4454d0beb65775f7644145a63d66fa8ca9f5a96fd 272384 PIL/_imagingcms.cp314-win_amd64.pyd
+# sha256 93c3ca5a3e7119897be9825a0a4228d485410fc8f1e42257edf7e89052c79bce 2171392 PIL/_imagingft.cp314-win_amd64.pyd
+# sha256 a7b3d6e462d338744694bc332f9f6f9c5717d532b7a74ad2762b3289521d0d9e 21504 PIL/_imagingmath.cp314-win_amd64.pyd
+# sha256 591905867dd3da9bcf85bc1f84be66817d0399c5a5f25755322e4088c0d42c51 12288 PIL/_imagingmorph.cp314-win_amd64.pyd
+# sha256 79208042672ff0b9e3669d5078ad35413470861e783feeaf1430458c41036593 14848 PIL/_imagingtk.cp314-win_amd64.pyd
+# sha256 f4d851381d1bd937753ba78e951c96a85f3a6c5ac402beec23fc13fdb6d45198 416256 PIL/_webp.cp314-win_amd64.pyd
+# sha256 ae833b9b5771f5932200bd3b8ad0f483f4fbec92cbdbd26d21d38fe524c60e66 112898048 cv2/cv2.pyd
+# sha256 7aabff029d1fa47cf56ede4dbbe05dc62da3208f07cd16471d4c966a33f9aa31 30876160 cv2/opencv_videoio_ffmpeg500_64.dll
+# sha256 222be8036ba2f3bea485a4f68b8f8f484ccd7197d96fd60518ab778854c3151a 149504 lxml/_elementpath.cp314-win_amd64.pyd
+# sha256 5af41a278c7a9294bf34ddac3840b3ed40ed4f7e201d9a8c8e8c4a5e504ee1a4 88576 lxml/builder.cp314-win_amd64.pyd
+# sha256 191eee78b34979c31ba08d952ca3cafabafe2f86d81adef19f0bcd4ad2ea53c9 4087296 lxml/etree.cp314-win_amd64.pyd
+# sha256 5f5a5731a9ae72b156153dac0421ccb8244df0a28727ebe3b3b6bdd83467ce5c 376832 lxml/html/_difflib.cp314-win_amd64.pyd
+# sha256 33d8838f47cb45b6d32b671851c724c71311d171a6ed4cd05de9b97a43b504d3 239104 lxml/html/diff.cp314-win_amd64.pyd
+# sha256 6e7e0479add68e3c3764efcf72bd0d0660b13868c07755f72515246340687961 1754624 lxml/objectify.cp314-win_amd64.pyd
+# sha256 9c48b8acb2c073ff3b79dfdbd80b0f1b60da99579f15fd61b57f8ebc09d74280 121344 lxml/sax.cp314-win_amd64.pyd
+# sha256 ed4f167a5330424524f45258e7ca2c8d7f03c0cba1f30ee4985553ac1f88ecf8 20589056 numpy.libs/libscipy_openblas64_-ed4f167a5330424524f45258e7ca2c8d.dll
+# sha256 a4c2229bdc2a2a630acdc095b4d86008e5c3e3bc7773174354f3da4f5beb9cde 575056 numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll
+# sha256 951b0d669409ce3fb6067be4c72858aad079c9e7dfcd1b3cc64d8aaf7c7b32bc 66048 numpy/_core/_multiarray_tests.cp314-win_amd64.pyd
+# sha256 b95589a363451f9695640b8f177dc07b71c845be81f2df6d1ee1c680797912af 3864064 numpy/_core/_multiarray_umath.cp314-win_amd64.pyd
+# sha256 c4e0d033fc36935829bf0c7287eaac50507f5f0efa5eb1ee96532deab0b68959 12288 numpy/_core/_operand_flag_tests.cp314-win_amd64.pyd
+# sha256 90416dface282baea35aa5f90ddb60b47074e80b57bffe6bec81ea7a8a3ab3dd 43520 numpy/_core/_rational_tests.cp314-win_amd64.pyd
+# sha256 8d1837a1a034545aeca7471f9ceb175fc3a3e1c3dce50dda16fa8f1b5f9a9263 831488 numpy/_core/_simd.cp314-win_amd64.pyd
+# sha256 07b39102c8de420bc3aa90119dcb6f05cbca81a4f7cc78159dc13c9f4784e7b6 14336 numpy/_core/_struct_ufunc_tests.cp314-win_amd64.pyd
+# sha256 bd22dfe1911eea158851ea0caa2955002c0016fd3449f27aa3bba3be1fe24c13 34304 numpy/_core/_umath_tests.cp314-win_amd64.pyd
+# sha256 33e546545a830506c9fde2ea7c389fecbf1c1bb32609a6ff9967661557c923d9 276480 numpy/fft/_pocketfft_umath.cp314-win_amd64.pyd
+# sha256 a0f03e13ab5b92fa267cb488b56f4c90f4f984f116bf314e46e1c2e8c9bdc575 112128 numpy/linalg/_umath_linalg.cp314-win_amd64.pyd
+# sha256 c269536b9a5670beba92123ce2039e7de3bf2d5fd9cdfccae51c4ba019e13712 18944 numpy/linalg/lapack_lite.cp314-win_amd64.pyd
+# sha256 9103a22b641f7f080aa9e2706d0e5a5ddb20dc66af8ee503ab2ba6dd6326acb5 215552 numpy/random/_bounded_integers.cp314-win_amd64.pyd
+# sha256 6c29b94d81dc63f4280b5c2556d9f77cd01d4e8297f035cc873b0d76ea62acfa 179200 numpy/random/_common.cp314-win_amd64.pyd
+# sha256 970bf3d6a441c735a57a46d2a352fd2286484b9ffa52f8ef7594339a1227e83c 637440 numpy/random/_generator.cp314-win_amd64.pyd
+# sha256 93a622cb6f39fd1faa37eac19db85caca440cb07bcaafe5bf47847c34c40a73c 93184 numpy/random/_mt19937.cp314-win_amd64.pyd
+# sha256 926275a0cdda89d65c4610476eb3871571027e926c896dc1962dedb5865e5883 105472 numpy/random/_pcg64.cp314-win_amd64.pyd
+# sha256 20ac777aa8f50f643c39289ca311095606aa6872e74349edbbda46ca7eb8a7a9 89600 numpy/random/_philox.cp314-win_amd64.pyd
+# sha256 db2cbc372e4444fd3825cc5f5bb49bf67488e473d27ebf84157a71fb0eaa66b9 62976 numpy/random/_sfc64.cp314-win_amd64.pyd
+# sha256 e5c82033c988c47aa022e8bb3b913d368b93d77e79e4a40f673b31b03ae9c10d 175616 numpy/random/bit_generator.cp314-win_amd64.pyd
+# sha256 f9b9aa2470342bd334920ac7f940192363ffa172cdbe0c17dd99c1a78a4d773e 530944 numpy/random/mtrand.cp314-win_amd64.pyd
+# sha256 0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9 557728 pikepdf.libs/msvcp140-0f885b509a685d2bbfa652fed26b5fb3.dll
+# sha256 635d5d3e63a38241d74096bb06ecf8b8f3e68db2a5c6e5e0310ec4de2dc8dc86 7069184 pikepdf.libs/qpdf30-eca0c1670a8d0fd8a8bc678bfc22fc30.dll
+# sha256 c7286e365297cc38d1f473b6cd3476f76fa45ad142753da67e89b2fec8cec0a4 864768 pikepdf/_core.pyd
+# sha256 197ee2fc9b4d071f7e048078cac741151a6585d871061cf5f88c0c73e31963a5 20262912 scipy.libs/libscipy_openblas-197ee2fc9b4d071f7e048078cac74115.dll
+# sha256 e28e733808d6e13269f62ba201af4060b3cabd3b1f0e53656876c14a228bf56a 191488 scipy/_cyutility.cp314-win_amd64.pyd
+# sha256 6ae095b27147c56f04f54570df87e7f79e9dfb316bdb67d83d858f429ee08ad7 105984 scipy/_lib/_ccallback_c.cp314-win_amd64.pyd
+# sha256 929eea8bad3d2b01aa74b4e909a5709dcc3fa78ffb267081ccd279411702010d 12288 scipy/_lib/_fpumode.cp314-win_amd64.pyd
+# sha256 98f9fe70d42cb707acb6cfc40010fe71fac76d845df6ff951410c2a25e270e21 48128 scipy/_lib/_test_ccallback.cp314-win_amd64.pyd
+# sha256 e927e8f8275569116a07d6993cf52fe0f5e3c6a73bb5d6e5b28e8549068f5068 36352 scipy/_lib/_test_deprecation_call.cp314-win_amd64.pyd
+# sha256 a066b8881734ae699f53d94183d77d60d3e4a387836f553e4f42e020caa68075 21504 scipy/_lib/_test_deprecation_def.cp314-win_amd64.pyd
+# sha256 f008241f173c4e95803908e6f9d48098067976c9167d9fadc5efe1c071e9117d 246272 scipy/_lib/_uarray/_uarray.cp314-win_amd64.pyd
+# sha256 59f7299b851b826b1df6cf0c3d6137085c5f7541ce44bcbda86c5901d5829254 60928 scipy/_lib/messagestream.cp314-win_amd64.pyd
+# sha256 3443fdd8d35afb9b098dbbd7055827d68d2bb660ff6e41436d772082e1a99daa 221696 scipy/cluster/hierarchy/_hierarchy.cp314-win_amd64.pyd
+# sha256 6fc748d42db836807dd4161396650333a1d39f259513e0bcf8412b3a16b00cf1 169472 scipy/cluster/hierarchy/_optimal_leaf_ordering.cp314-win_amd64.pyd
+# sha256 493b89c806c0059db736e65be039224934d4feb3f2cd313fa6bc9438c33c1a49 103424 scipy/cluster/vq/_vq.cp314-win_amd64.pyd
+# sha256 5311147ba391bbab3110c5c910a0ae7b3c663f04be6deddb72acef9eab3b8db7 2786816 scipy/fft/_duccfft/pyduccfft.cp314-win_amd64.pyd
+# sha256 7e9700758e475502f64f6c1f91a86df36c6a56e7551d4e5b556fe2d998b35427 117248 scipy/fftpack/convolve.cp314-win_amd64.pyd
+# sha256 8b1126d9dd9e5d03657b8c08e7795c296f246d2bf6be122fd808f992f8567f3a 87040 scipy/integrate/_dop.cp314-win_amd64.pyd
+# sha256 0c8799820af84ddc3341263d4a4ecd2e12c733fe636cbdcaf195c55a1adf3f9b 98816 scipy/integrate/_odepack.cp314-win_amd64.pyd
+# sha256 d46c53dadff67bb3fdb4a1f060d840759c2e98e3587107c5d515ab18841fd616 141824 scipy/integrate/_quadpack.cp314-win_amd64.pyd
+# sha256 3e6d4d544d1d0faf95147dda0374e70e007f82a840997d4f1163b2c6facccb57 13824 scipy/integrate/_test_multivariate.cp314-win_amd64.pyd
+# sha256 b56f8470087e1dbb778a2e7886dbc1e63c8394aecef8d67c6e5fe49998d72411 139264 scipy/integrate/_vode.cp314-win_amd64.pyd
+# sha256 9492f436e86e4e95acaaedd65efb86a05fbbc517ad35eb481c7a8b64c6e6e235 292864 scipy/interpolate/_dierckx.cp314-win_amd64.pyd
+# sha256 93ed3c19426c2b9b6df7140d9b16489d812aae836b7d0c182f9ae97215200344 345088 scipy/interpolate/_fitpack.cp314-win_amd64.pyd
+# sha256 3f379f639427dc0c85613cf1a79def41bfa4481ae993ec2e338074563dc86a44 233984 scipy/interpolate/_interpnd.cp314-win_amd64.pyd
+# sha256 e4b6b0d773edfaa4adbfb776c4924df0d28f41e36485e167d932f6c07a1e7520 205312 scipy/interpolate/_ppoly.cp314-win_amd64.pyd
+# sha256 3d6ac56b457bd95cc10931bd8da71fb04ba460da3d62e72398480df5e598b540 1144832 scipy/interpolate/_rbfinterp_pythran.cp314-win_amd64.pyd
+# sha256 23354cb57c548cd68569a0d41bc93b9c703d18a44c8cfc47bdbd3af2b0c9c4fa 120320 scipy/interpolate/_rgi_cython.cp314-win_amd64.pyd
+# sha256 22b498156a4081c166277c889b6f0b6741688f0ade1dc47244183c6b06b96e73 2879488 scipy/io/_fast_matrix_market/_fmm_core.cp314-win_amd64.pyd
+# sha256 2517790b97ad1ec9d101b3a1cf37dc91d40c5016c5c93beab03a4200d85270ec 185344 scipy/io/matlab/_mio5_utils.cp314-win_amd64.pyd
+# sha256 0a37632b810ec93ae633adf26b4cf68b963411b29055c8a530368ff63ca7acae 52736 scipy/io/matlab/_mio_utils.cp314-win_amd64.pyd
+# sha256 6b5f472d58bbfe304020b29c792dd7633a6c8e73d33cbe44abed605a674ff788 111104 scipy/io/matlab/_streams.cp314-win_amd64.pyd
+# sha256 9970f0e8fca36001af7e4fb8624fc4cc7a748bf175a4e46652de6f8eab82e8a5 1165824 scipy/linalg/_batched_linalg.cp314-win_amd64.pyd
+# sha256 9eaec0376c19aacd35e50f6955c25bec2297217841372e12ca7329fa891632a0 199168 scipy/linalg/_cythonized_array_utils.cp314-win_amd64.pyd
+# sha256 552aeb5ae587cd2dd17cba3883fd3fb9db8497ef69fb3a6ed12a011112b171c0 742912 scipy/linalg/_decomp_interpolative.cp314-win_amd64.pyd
+# sha256 a07158eaf27b2d6b0a8d72f8cac3fb58ce2871863b8f644bdce90905c32f8a3d 303104 scipy/linalg/_decomp_update.cp314-win_amd64.pyd
+# sha256 49c3b44062acb3ed989a3c49b80785bc91a276bc7255d1dd3027062a8d72a001 739328 scipy/linalg/_fblas.cp314-win_amd64.pyd
+# sha256 728ec00ef96d6a4d6f4759455d5d8cb7b549be1de597fb37ee3f46b70d359f4e 2300416 scipy/linalg/_flapack.cp314-win_amd64.pyd
+# sha256 d27d15b6b4c4a855439d52ff6bc0fbd5e19fb63b0a27bc7fe3d3a2a42edbf75d 172032 scipy/linalg/_internal_matfuncs.cp314-win_amd64.pyd
+# sha256 432b31c8ca33547b9a003facf8d2d074f397ffdd9163ba68133a7877310b248b 1037824 scipy/linalg/_linalg_pythran.cp314-win_amd64.pyd
+# sha256 b7c0b581afba6b653ab61e9f59ce8e20437ee06d9dac97e502324de294239151 107520 scipy/linalg/_matfuncs_sqrtm_triu.cp314-win_amd64.pyd
+# sha256 f51bbcfd05c249e74068a6fba8557dff16f340d1741b0110c3e15417db4b7036 123392 scipy/linalg/_solve_toeplitz.cp314-win_amd64.pyd
+# sha256 a83299a99bba260d849223deee1096a9c0b3d62f4161d80825e282355acf3f84 127488 scipy/linalg/cython_blas.cp314-win_amd64.pyd
+# sha256 7716bc179d52948b6c6fbe9a6550d6b2d8769a5cb2dc27e8275745d8e3a4949f 203264 scipy/linalg/cython_lapack.cp314-win_amd64.pyd
+# sha256 07828effaaaad6acec6b72040e868b349f39f643b8aa7c37ca051334802f7ec6 13824 scipy/ndimage/_ctest.cp314-win_amd64.pyd
+# sha256 111d96e01c8c3cc438bc9523961a85cc0ed0886a32fedda04071cae7ffa1795b 73216 scipy/ndimage/_cytest.cp314-win_amd64.pyd
+# sha256 e949b4c930f51353fbbf56451400ed4775eff6238e5b3e63559763c3863e38a7 196608 scipy/ndimage/_nd_image.cp314-win_amd64.pyd
+# sha256 9fc69b6306255a62f08aa5b07a1a695b25a87e8cef6df210a7f25f184350d495 210432 scipy/ndimage/_ni_label.cp314-win_amd64.pyd
+# sha256 35d83fdd6789d7c1d10829f075ac3cbb67a9f1c2df4096c615c3fe6d492e30da 128000 scipy/ndimage/_rank_filter_1d.cp314-win_amd64.pyd
+# sha256 02448d04b61ad1832740c1f38f897ac91c1597d6a0648318eadcec1a06560836 715776 scipy/odr/__odrpack.cp314-win_amd64.pyd
+# sha256 d9058a62db2ac7ad1a7137523202ad88e60543ed54e77f12f48425ccc85550f8 174080 scipy/optimize/_bglu_dense.cp314-win_amd64.pyd
+# sha256 58efb7205fe16f0a22753f9710499326f663febf05f52ab438b47b6b5c17bc9b 70656 scipy/optimize/_direct.cp314-win_amd64.pyd
+# sha256 cdbdbba0b99c94931d266dd24b6f963389a378fb8282019dadec7d97420b1b67 1007616 scipy/optimize/_group_columns.cp314-win_amd64.pyd
+# sha256 0cc6d8c8809bc014ae6c64f688e99d1875e25067f3c245e147136aa0ffc1fcf0 6708224 scipy/optimize/_highspy/_core.cp314-win_amd64.pyd
+# sha256 7dbef04c968754ad2620ac48957ada66db05e399a54752c7bfcb9319f99de8e3 543232 scipy/optimize/_highspy/_highs_options.cp314-win_amd64.pyd
+# sha256 a4929b6f3e0d6db50fb5812afc47b28d8224af797fd03547b07907d5ab0feb5d 49664 scipy/optimize/_lbfgsb.cp314-win_amd64.pyd
+# sha256 cf9ebfdf90f17e6c7f1bc5c195db938f8912b7101bd17746fbfdf03f6d0b9001 190976 scipy/optimize/_lsap.cp314-win_amd64.pyd
+# sha256 7924216a299c3d5fcff0dbd87d7f684316cb720c5ceb6ee5e2210d58cb16b9ea 70144 scipy/optimize/_lsq/givens_elimination.cp314-win_amd64.pyd
+# sha256 df4712ee30eb0be4dc863e89b741d5cf2031975cc707f1a5a3191c3900bece8f 125952 scipy/optimize/_minpack.cp314-win_amd64.pyd
+# sha256 8ff2430935101b9e62afa2d6b99e0381644845fa18c1abdc66e344955dd520d4 148480 scipy/optimize/_moduleTNC.cp314-win_amd64.pyd
+# sha256 8986110f70d2a242a9c996f9976c907e56d7419b7cda859b203bf8d33c7e7e70 324608 scipy/optimize/_pava_pybind.cp314-win_amd64.pyd
+# sha256 d021013641f074e747f36a9a621a6813c6970ce665f95c353d9bbee5f8202d1d 48640 scipy/optimize/_slsqplib.cp314-win_amd64.pyd
+# sha256 3a0eab80be93df7795072851cd9babc5c25414dd29874f20db5d1de5f1d27fc8 205824 scipy/optimize/_trlib/_trlib.cp314-win_amd64.pyd
+# sha256 7b713eb1139bbec7b67c58f9003bad53a7718da45fa270f53affaa344ddf2312 23040 scipy/optimize/_zeros.cp314-win_amd64.pyd
+# sha256 c13562980170da7ef9a90bf6434ec0e4e1fc068959ad344e62bf695bcb28d43d 82944 scipy/optimize/cython_optimize/_zeros.cp314-win_amd64.pyd
+# sha256 00829fa368b458c22ff41b0686fd807a21443572437c6cb3fb58a66c8b3360aa 979968 scipy/signal/_max_len_seq_inner.cp314-win_amd64.pyd
+# sha256 5bdf64f538c1b6a30361db2f38a39f35f9e95c8b20a6ce923205a5666261ecbd 130560 scipy/signal/_peak_finding_utils.cp314-win_amd64.pyd
+# sha256 f89e4ef4e82b60acdbf7ffd9d1fdd7ebf04f9c5b9d2ef1d5fbb246b813c08e60 118784 scipy/signal/_sigtools.cp314-win_amd64.pyd
+# sha256 b5dcad3a239266765ef89f665b5a5c6d14c150e7de326f14b618b51d623b6526 111104 scipy/signal/_sosfilt.cp314-win_amd64.pyd
+# sha256 a26051599111ff4c10fc5ef367c6cedca9717b99c57bc5af31a69bad3fe0b2ee 59392 scipy/signal/_spline.cp314-win_amd64.pyd
+# sha256 544ad7ae2cb47874e2fe47e52cb7f165e31f4aca8456b4c12111f82b82ecdc12 192512 scipy/signal/_upfirdn_apply.cp314-win_amd64.pyd
+# sha256 503a3ea1a4181243022d5901f4fecdc72d35acf52cfe4ecd406a2ab321e32259 405504 scipy/sparse/_csparsetools.cp314-win_amd64.pyd
+# sha256 69d3739325be8fb877c97e3f041c3d4503b59037b2cb2830411c46eb632c4fde 4239360 scipy/sparse/_sparsetools.cp314-win_amd64.pyd
+# sha256 ae1df4512ff4c48855bf5e9af13215be4c364be363671c3c306c16ddfd15a5b7 183808 scipy/sparse/csgraph/_flow.cp314-win_amd64.pyd
+# sha256 2068733343a25e88f54d520fb8fe2f22f296d83171c4be69d3c72597c48c2e72 181760 scipy/sparse/csgraph/_matching.cp314-win_amd64.pyd
+# sha256 1925f5063c967b395241f1148257e200c32f6c2e27e702f6e7d65260ce0bbcf5 103424 scipy/sparse/csgraph/_min_spanning_tree.cp314-win_amd64.pyd
+# sha256 fa862da5a31ac47c77b1e457417811bbaa45ee35b59527fe95b9490125f59c8f 151552 scipy/sparse/csgraph/_reordering.cp314-win_amd64.pyd
+# sha256 dc69bb1240532131915ffa2171384e031517ef4a4f4164bb855db8909658428c 656384 scipy/sparse/csgraph/_shortest_path.cp314-win_amd64.pyd
+# sha256 77201334677ee354a9d0f217ac8668773b5f40235bb35a3d504d5f4aeddf1c72 158720 scipy/sparse/csgraph/_tools.cp314-win_amd64.pyd
+# sha256 c20456c29df5af13f233284c9296d290e576124184a5fd65dcfb0c57c193c32f 503808 scipy/sparse/csgraph/_traversal.cp314-win_amd64.pyd
+# sha256 000bcd06584ff04d07c1893ceb8725ca1a2d099560be74eef75e83351a02bdba 425984 scipy/sparse/linalg/_dsolve/_superlu.cp314-win_amd64.pyd
+# sha256 c56ad568e45c6af01b889db29f72057b05d3b5d127a2accbbdf25807864e3932 222720 scipy/sparse/linalg/_eigen/arpack/_arpacklib.cp314-win_amd64.pyd
+# sha256 938dd760cc24dd7f419f001a5067ea3c9796fd7e6b736466cfe3945269ca214a 166912 scipy/sparse/linalg/_propack.cp314-win_amd64.pyd
+# sha256 31c44e099488316270a90a016421a459bbbd48395546a1e20a0bee2650ac5c85 863744 scipy/spatial/_ckdtree.cp314-win_amd64.pyd
+# sha256 49edf62f5caf728a105b2e5750a16652e84d1aac73341d5f9c3bd15ff83114de 1478144 scipy/spatial/_distance_pybind.cp314-win_amd64.pyd
+# sha256 9878af5881364edd9676ccca2dbca209f04ce23003348386bc55e74759776d12 128512 scipy/spatial/_distance_wrap.cp314-win_amd64.pyd
+# sha256 cae592e6e4bad5115aa34f2a88177a2b4425f073c0c7985e02c6ecd30be00b79 92672 scipy/spatial/_hausdorff.cp314-win_amd64.pyd
+# sha256 13144b6bd13515ba6ada63f2f0098ac2fcdbba38451987cdf17259cc421f1102 869376 scipy/spatial/_qhull.cp314-win_amd64.pyd
+# sha256 5c7659f564df69e322b2648a8878b1f012f9e074dedf4d12904e8feb1c79ac64 87552 scipy/spatial/_voronoi.cp314-win_amd64.pyd
+# sha256 2b885661a30288de2c00941e0858d720a362951583ca20f44016a68e9a7af3fb 238080 scipy/spatial/transform/_rigid_transform_cy.cp314-win_amd64.pyd
+# sha256 93e5081f8626393f95be314f45fba0e0297c75dea6a032253744f6b4e46c9f36 524800 scipy/spatial/transform/_rotation_cy.cp314-win_amd64.pyd
+# sha256 066539b386641d98bf1747ae79eb7b52980e9418344f6e8c230204cde1a6a225 48128 scipy/special/_comb.cp314-win_amd64.pyd
+# sha256 1de75b43bace67085065888db7f5238225289a338cbe4d4ab39442fd6fcae96c 131584 scipy/special/_ellip_harm_2.cp314-win_amd64.pyd
+# sha256 d2bfe2dc9c20c8a8100d66c9a5d4f3272b2fc6128322e53a06bd20211c042804 937984 scipy/special/_gufuncs.cp314-win_amd64.pyd
+# sha256 545c98b7422c19ef8424c75bcd0295a822ca9f67be44d41f7c84217f8d8f9c1d 311808 scipy/special/_specfun.cp314-win_amd64.pyd
+# sha256 597121a9bc2613704e3f3322bc95c0dd4f84045d1c6534fcf98c241c02d80614 1630720 scipy/special/_special_ufuncs.cp314-win_amd64.pyd
+# sha256 49b6d15e3057109ac889fb9a866a940082dcc5aa4cde87fa82e7778f6f53cda9 94208 scipy/special/_test_internal.cp314-win_amd64.pyd
+# sha256 28ab8bf3adebe1b4b701856f9b4188429d7866dd1fa99e7e7285b1787af01871 1433600 scipy/special/_ufuncs.cp314-win_amd64.pyd
+# sha256 13d0a363ca55901965213b83dc797e5e462e19ed10ab2abc3720fb21097dad0f 2673664 scipy/special/_ufuncs_cxx.cp314-win_amd64.pyd
+# sha256 18dd3ee7e9e63354998896cc472aa9ee40dec8fe7395782003c83a317a279b82 2283008 scipy/special/cython_special.cp314-win_amd64.pyd
+# sha256 9cc2120c7e3bc2e0a8fb7c31d6f0c98a10fa7dcd76b0623874ea0d0ada0c4cb0 105472 scipy/stats/_ansari_swilk_statistics.cp314-win_amd64.pyd
+# sha256 f4b11b191561b96f85be3b0436cdb503d91129cf279294d00ae515897bb164b1 375296 scipy/stats/_biasedurn.cp314-win_amd64.pyd
+# sha256 4e7424af07166ec34b30ba0785c10e9f724b5655ad5d979008680c92a6f73c99 45568 scipy/stats/_levy_stable/levyst.cp314-win_amd64.pyd
+# sha256 42309ad61089b789f9f3bbfae081e23147678600f29ac422b70f4fd32c55ea1e 1070080 scipy/stats/_qmc_cy.cp314-win_amd64.pyd
+# sha256 be811de06a71f7430339c45b2cd05b5137770c9a1ef7f3f87766ff7fb38da032 127488 scipy/stats/_qmvnt_cy.cp314-win_amd64.pyd
+# sha256 dd00d7f3640ac8e52a6e0d965fe7f32b02fc56fbb5fa1cab5c948023724b3507 109056 scipy/stats/_rcont/rcont.cp314-win_amd64.pyd
+# sha256 ecbd7e9cc357e329f4dde5f3e691de79b933bbb1a6b9717bc446fb3151cb49da 167424 scipy/stats/_sobol.cp314-win_amd64.pyd
+# sha256 419fb3cbd4c1c54a9f3fd4618685cf7db59a78e806c915233add7f198cd8c1a2 453632 scipy/stats/_stats.cp314-win_amd64.pyd
+# sha256 d83868cfbdc265a51549e7371c8fa44d56218e811d3e160bca51cb0cf7f1c07f 1044992 scipy/stats/_stats_pythran.cp314-win_amd64.pyd
+# sha256 ff4e1921445d72ce536ccd5c0657dc32d9117caefbc7a1e7003c5de25206cc41 1265664 scipy/stats/_unuran/unuran_wrapper.cp314-win_amd64.pyd
