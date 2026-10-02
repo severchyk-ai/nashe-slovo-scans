@@ -195,6 +195,11 @@ def main():
     for it in done:
         s, f = it["seq"], it["full"]
         lines = list(f.get("flags") or [])
+        # Шов доданого паперу: коротка рампа і заливка шумом — у позначки ns-full (і в стан номера) не
+        # входять, але оператор має їх бачити: на пробі 02.10 він дивився саме такі боки (2291/2 верх).
+        for pr in f.get("pad_report") or []:
+            if (pr.startswith("рампа коротша") or pr.startswith("ЗАЛИТО ШУМОМ")) and not pr.rstrip().endswith("немає"):
+                lines.append("шов доданого паперу — " + pr)
         if design and s in design:
             lines += ["друк до краю (ns-designscan): стор. %d — %.0f %%" % pv for pv in sorted(design[s])]
         k = keep.get(s)
