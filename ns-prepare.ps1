@@ -18,7 +18,8 @@
 param(
     [Parameter(Mandatory = $true)][int]$Seq,
     [string]$Edge,
-    [switch]$NoPreview
+    [switch]$NoPreview,
+    [switch]$ResetEdge          # page_edge у маніфесті, що НЕ із заміру ниток, свідомо відкинути (старе значення — у журнал)
 )
 
 . "$PSScriptRoot\ns-lib.ps1"
@@ -54,6 +55,29 @@ function Invoke-NsStep {
 if (-not (Test-NsPyModules -For "номер $Seq")) { Write-Log "ЗУПИНКА: OpenCV заблоковано Windows — номер $Seq НЕ ЗРОБЛЕНО." Red; exit $script:NS_EXIT_BLOCKED }
 
 Write-Log ("ПІДГОТОВКА {0} ({1}, {2} стор.)" -f $Seq, $man.date, @($man.pages).Count) White
+
+# page_edge у маніфесті, якого НЕ дав замір ниток (слово оператора: 2254, 2288 `7T1.5`, 2324 `1T5.5`;
+# виміри старої сесії: 2227, 2237), цей скрипт без -Edge ПЕРЕЗАПИСАВ би заміром — мовчки. Не стирати
+# мовчки й не застосовувати мовчки (02.10.2026): зупинитися й назвати. Із заміру — те, що є в spine.json.
+if (-not $Edge -and $man.PSObject.Properties.Name -contains 'page_edge' -and $man.page_edge) {
+    $oldMeasured = @{}
+    $osj = Join-Path $work "spine.json"
+    if (Test-Path $osj) {
+        try { $oe = (Get-Content $osj -Raw -Encoding UTF8 | ConvertFrom-Json).edge } catch { $oe = "" }
+        foreach ($tk in ("$oe" -split '[,\s]+')) { if ($tk) { $oldMeasured[$tk.ToUpper()] = $true } }
+    }
+    $handTok = @("$($man.page_edge)" -split '[,\s]+' | Where-Object { $_ -and -not $oldMeasured.ContainsKey($_.ToUpper()) })
+    if ($handTok.Count -gt 0) {
+        if ($ResetEdge) {
+            Write-Log ("    -ResetEdge: page_edge не із заміру ВІДКИНУТО: {0} (було в маніфесті: {1})" -f ($handTok -join " "), $man.page_edge) Yellow
+        } else {
+            Write-Log ("ЗУПИНКА: у маніфесті {0} є page_edge НЕ із заміру ниток: {1}" -f $Seq, ($handTok -join " ")) Red
+            Write-Log ("    увесь page_edge: {0}" -f $man.page_edge) Red
+            Write-Log "    ns-prepare перезаписав би його заміром. Слово оператора — задати явно: -Edge `"…`"; застаріле — -ResetEdge. Номер НЕ ЗРОБЛЕНО." Red
+            exit 3
+        }
+    }
+}
 $rot = if ($man.PSObject.Properties.Name -contains 'page_rotate' -and $man.page_rotate) { [string]$man.page_rotate } else { "" }
 $summary = [ordered]@{ seq = $Seq; date = $man.date; pages = @($man.pages).Count }
 # Великі дірки від зшивача (і їхнє заростання) — лише в роках із NS_SPINE_RULES (2002).
@@ -115,7 +139,18 @@ $summary.holes = [ordered]@{ filled = $filled; expected = $expHoles; left_near_p
 Write-Log ("    дірок зарощено {0} із очікуваних {1}; лишено біля друку/за формою: {2} {3}" -f $filled, $expHoles, $left, ($holePages -join "; ")) $(if ($filled -lt $expHoles) { "Yellow" } else { "Green" })
 
 # --- 5: render ------------------------------------------------------------
-$rl = Invoke-NsStep "render (тон, рамка, JPEG)" (Join-Path $PSScriptRoot "ns-render.ps1") @{ Seq = $Seq; Force = $true }
+# render — стандарт 02.10.2026 (доповнення папером, без масштабу); маски доданого — для підсумку шва
+$maskDir = Join-Path $work "masks"
+$rl = Invoke-NsStep "render (тон, доповнення папером, рамка, JPEG)" (Join-Path $PSScriptRoot "ns-render.ps1") @{ Seq = $Seq; Force = $true; PadMaskDir = $maskDir }
+# сторінки, де латок справжнього паперу мало (або 0 — шум): оператор має глянути
+$padReview = @($rl | Where-Object { $_ -match 'НА ОГЛЯД' } | ForEach-Object { $_.Trim() })
+$summary.pad_review = $padReview
+foreach ($w in $padReview) { Write-Log ("    " + $w) Yellow }
+$pr = & $py (Join-Path $PSScriptRoot "ns-padreport.py") (Join-Path $work "render") "--masks" $maskDir 2>&1 | ForEach-Object { "$_" }
+foreach ($l in $pr) { Add-Content -Path $logf -Value $l -Encoding UTF8 }
+if ($LASTEXITCODE -eq $script:NS_EXIT_BLOCKED) { Write-Log "ЗУПИНКА: OpenCV заблоковано Windows — номер $Seq НЕ ЗРОБЛЕНО (підсумок шва). Не обходити; сказати оператору." Red; exit $script:NS_EXIT_BLOCKED }
+$summary.pad_report = @($pr | Where-Object { $_ -match '^(сторінок:|ЗАЛИТО|НА ОГЛЯД|рампа коротша|найгірші шви|медіана по)' })
+foreach ($l in $summary.pad_report) { Write-Log ("    " + $l) Gray }
 $notUnified = @($rl | Where-Object { $_ -match 'не зведено до спільного розміру' } | ForEach-Object { $_.Trim() })
 $summary.render_not_unified = $notUnified
 if ($notUnified.Count) { Write-Log ("    не зведено до спільного розміру: {0} стор." -f $notUnified.Count) Yellow }
@@ -140,7 +175,7 @@ $summary.minutes = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
 
 # стан номера (станція 2 -> 3, КОНВЕЄР.md): без позначок і з паспортом року -> ready, інакше -> review (огляд оператора).
 # Паспорта року (NS_MASTERS\_catalog\years\<рік>.json) ще немає ні в кого, тож поки що йдуть на огляд усі.
-$nFlags = @($summary.edge_watch).Count + @($summary.render_not_unified).Count + @($summary.frame_uneven).Count + [int]$left
+$nFlags = @($summary.edge_watch).Count + @($summary.render_not_unified).Count + @($summary.frame_uneven).Count + @($summary.pad_review).Count + [int]$left
 if ($summary.spine) { foreach ($it in @($summary.spine.pages)) { $nFlags += @($it.flags).Count } }
 $hasPassport = Test-Path (Join-Path $script:CATALOG ("years\{0}.json" -f $man.year))
 $curState = Get-NsIssueState $man

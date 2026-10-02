@@ -10,7 +10,8 @@
 
 param(
     [Parameter(Mandatory = $true)][string[]]$Seq,
-    [int]$Parallel = 2
+    [int]$Parallel = 2,
+    [switch]$IncludeManual      # брати й номери зі списку «лише вручну» (ns-manual.csv); без ключа вони пропускаються
 )
 
 . "$PSScriptRoot\ns-lib.ps1"
@@ -24,6 +25,14 @@ foreach ($s in @($Seq | ForEach-Object { $_ -split '[,\s]+' } | Where-Object { $
     else { Write-Host "Не зрозумів номер: $s" -ForegroundColor Red; exit 1 }
 }
 $list = @($list | Select-Object -Unique)
+# «лише вручну» (ns-manual.csv): пакет такі номери не чіпає
+$manualSkipped = @()
+if (-not $IncludeManual) {
+    $manual = Get-NsManual
+    foreach ($n in $list) { if ($manual.ContainsKey($n)) { $manualSkipped += $n; Write-Host ("  {0}: лише вручну — {1} — ПРОПУЩЕНО" -f $n, $manual[$n]) -ForegroundColor Yellow } }
+    $list = @($list | Where-Object { $manualSkipped -notcontains $_ })
+    if ($list.Count -eq 0) { Write-Host "У пакеті не лишилося номерів." -ForegroundColor Yellow; exit 0 }
+}
 $t0 = Get-Date
 $queue = [System.Collections.Queue]::new(); foreach ($n in $list) { $queue.Enqueue($n) }
 $running = @{}

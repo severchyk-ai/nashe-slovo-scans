@@ -25,10 +25,12 @@ param(
 Initialize-NsConsole
 
 $needTools = if ($NoOcr) { "scan" } else { "ocr" }
-if (-not (Test-NsTools -Need $needTools)) { Write-Host "Бракує інструментів." -ForegroundColor Red; exit 1 }
 # OCR бере маску червоної ручки (ns-penmask.py, OpenCV) і шар тексту (pikepdf); Windows часом блокує
-# непідписані модулі — сказати ДО 15 хвилин OCR, а не зібрати номер без маски мовчки (02.10.2026)
+# непідписані модулі — сказати ДО 15 хвилин OCR, а не зібрати номер без маски мовчки (02.10.2026).
+# Стоїть ПЕРЕД Test-NsTools: той на заблокований pikepdf каже «БРАКУЄ: ocrmypdf» і виходить із кодом 1,
+# а довгий прогін чекає блокування лише за кодом 42 (справжнє блокування pikepdf 02.10.2026 13:59).
 if (-not $NoOcr -and -not (Test-NsPyModules -Set ocr -For "збирання номера $Seq")) { exit $script:NS_EXIT_BLOCKED }
+if (-not (Test-NsTools -Need $needTools)) { Write-Host "Бракує інструментів." -ForegroundColor Red; exit 1 }
 
 $issueDir = Find-NsIssueDir -Seq $Seq
 if (-not $issueDir) { Write-Host "Номер $Seq не знайдено в каталозі." -ForegroundColor Red; exit 1 }

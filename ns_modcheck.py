@@ -48,8 +48,12 @@ def probe(mods):
         try:
             importlib.import_module(m)
         except Exception as e:                      # ImportError, OSError від DLL тощо
-            txt = "%s: %s" % (type(e).__name__, e)
-            low = txt.lower()
+            full = "%s: %s" % (type(e).__name__, e)
+            low = full.lower()
+            # pikepdf загортає причину в довгий багаторядковий текст — у рядок «ЗУПИНКА» йде сама причина
+            lines = [l.strip() for l in full.splitlines() if l.strip()]
+            key = [l for l in lines if "application control" in l.lower() or "blocked" in l.lower()]
+            txt = (lines[0] if lines else full)[:200] + ((" … " + key[-1][:200]) if key and key[-1] != lines[0] else "")
             bad.append((m, "application control" in low or "blocked" in low, txt))
     return bad
 

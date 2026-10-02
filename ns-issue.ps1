@@ -41,6 +41,10 @@ if ($All) {
     if ($Skip.Count -gt 0) {
         $targets = @($targets | Where-Object { $Skip -notcontains $_ })
     }
+    # «лише вручну» (ns-manual.csv): -All такі номери не чіпає; одиничний -Seq N — працює
+    $manual = Get-NsManual
+    foreach ($n in @($targets)) { if ($manual.ContainsKey($n)) { Write-Host ("  {0}: лише вручну — {1} — ПРОПУЩЕНО" -f $n, $manual[$n]) -ForegroundColor Yellow } }
+    $targets = @($targets | Where-Object { -not $manual.ContainsKey($_) })
     if ($targets.Count -eq 0) {
         Write-Host "Нічого збирати: немає номерів у потрібному стані." -ForegroundColor Yellow
         exit 0

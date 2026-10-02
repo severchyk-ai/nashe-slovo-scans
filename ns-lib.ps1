@@ -98,6 +98,22 @@ function Initialize-NsConsole {
 
 $script:NS_EXIT_BLOCKED = 42
 
+# Номери «ЛИШЕ ВРУЧНУ» (рішення оператора 28.09 і 02.10.2026): новий дизайн (друк і плашки до краю),
+# вкладки, повороти, свій порядок, не 10 сторінок, календарі. Пакетні прогони (ns-prepare-batch,
+# ns-issue -All) такі номери ПРОПУСКАЮТЬ із рядком «лише вручну»; одиничний запуск -Seq N працює.
+# Файл під git, поруч зі скриптами: seq,reason. Як складено — ns-designscan.py і звіт 02.10.2026 (3).
+$script:NS_MANUAL_FILE = Join-Path $PSScriptRoot "ns-manual.csv"
+function Get-NsManual {
+    <#  @{ [int]номер = причина } із ns-manual.csv; порожньо, якщо файла немає.  #>
+    $h = @{}
+    if (Test-Path $script:NS_MANUAL_FILE) {
+        foreach ($r in @(Import-Csv -Path $script:NS_MANUAL_FILE -Encoding UTF8)) {
+            if ("$($r.seq)" -match '^\d+$') { $h[[int]$r.seq] = "$($r.reason)" }
+        }
+    }
+    return $h
+}
+
 function Test-NsPyModules {
     <#  Чи вантажаться модулі Python, без яких крок не має сенсу (02.10.2026).
         Smart App Control час від часу блокує OpenCV (cv2.pyd без підпису: 23.09,
@@ -135,8 +151,11 @@ function Wait-NsPyModules {
     if ($env:NS_TEST_WAIT_MAX_SEC) { $max = [int]$env:NS_TEST_WAIT_MAX_SEC }
     $t0 = Get-Date; $until = $t0.AddSeconds($max); $k = 0
     $blf = Join-Path $script:NS_WORK "_opencv_block.log"
+    # що саме заблоковано (OpenCV, pikepdf …) — з рядка «ЗУПИНКА» ns_modcheck
+    $mo = @(& python (Join-Path $PSScriptRoot "ns_modcheck.py") $Set 2>&1 | ForEach-Object { "$_" })
+    $what = if (($mo -join " ") -match 'ЗУПИНКА: (.+?) — ') { $Matches[1] -replace ' заблоковано Windows \(Smart App Control\)', '' } else { "?" }
     $say = { param($t, $c) Write-Host $t -ForegroundColor $c; try { Add-Content -Path $blf -Value $t -Encoding UTF8 } catch { } }
-    & $say ("[{0}] OpenCV заблоковано Windows (Smart App Control) — {1}: чекаю, пробую кожні {2} до {3}" -f $t0.ToString("yyyy-MM-dd HH:mm:ss"), $For, $(if ($every -ge 60) { "{0:N0} хв" -f ($every / 60) } else { "$every с" }), $until.ToString("HH:mm")) "Yellow"
+    & $say ("[{0}] модулі Python заблоковано Windows (Smart App Control): {4} — {1}: чекаю, пробую кожні {2} до {3}" -f $t0.ToString("yyyy-MM-dd HH:mm:ss"), $For, $(if ($every -ge 60) { "{0:N0} хв" -f ($every / 60) } else { "$every с" }), $until.ToString("HH:mm"), $what) "Yellow"
     while ((Get-Date) -lt $until) {
         Start-Sleep -Seconds $every
         $k++
@@ -147,7 +166,7 @@ function Wait-NsPyModules {
         & $say ("[{0}] спроба {1}: досі заблоковано" -f (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"), $k) "DarkYellow"
     }
     $null = Test-NsPyModules -Set $Set -For $For      # надрукує «ЗУПИНКА: …» із текстом помилки
-    & $say ("[{0}] ЗУПИНКА: OpenCV заблоковано вже {1:N1} год — {2} НЕ ЗРОБЛЕНО. Не обходити; сказати оператору." -f (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"), ((Get-Date) - $t0).TotalHours, $For) "Red"
+    & $say ("[{0}] ЗУПИНКА: модулі Python ({3}) заблоковано вже {1:N1} год — {2} НЕ ЗРОБЛЕНО. Не обходити; сказати оператору." -f (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"), ((Get-Date) - $t0).TotalHours, $For, $what) "Red"
     return $false
 }
 
