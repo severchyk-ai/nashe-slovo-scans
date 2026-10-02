@@ -3,6 +3,7 @@
 #   .\ns-full.ps1 -Seq 2273
 #   .\ns-full.ps1 -Seq 2273 -BuildOnly     підготовку вже зроблено (render на місці) — лише PDF з OCR і перевірки
 #   .\ns-full.ps1 -Seq 2273 -KeepWork      не прибирати prep / render / masks після успіху
+#   .\ns-full.ps1 -Seq 2273 -Reflag        готовий номер: перерахувати позначки шва й зрізу без ниток, нічого не збираючи
 #
 # Рішення оператора 02.10.2026 (варіант А): звичайний номер іде одразу до готового PDF з OCR; оператор
 # дивиться лише позначені сторінки й кілька випадкових номерів на рік. ns-issue для цього не годиться —
@@ -23,6 +24,7 @@ param(
     [switch]$BuildOnly,
     [switch]$IncludeManual,
     [switch]$KeepWork,
+    [switch]$Reflag,            # нічого не збирати: перерахувати позначки готового номера з наявних журналів
     [string]$OldPdfDir = "_old_pdf_02.10"
 )
 
@@ -37,11 +39,47 @@ $work = Join-Path $script:NS_WORK "$Seq"
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 $logf = Join-Path $work "full.log"
 $fullJson = Join-Path $work "full.json"
-"" | Set-Content $logf -Encoding UTF8
 $py = if ($script:PYTHON) { $script:PYTHON } else { "python" }
 $env:PYTHONIOENCODING = "utf-8"
 
 function Write-Log { param([string]$T, [string]$Color = "Gray") Write-Host $T -ForegroundColor $Color; Add-Content -Path $logf -Value $T -Encoding UTF8 }
+
+function Get-NsExtraFlags {
+    <#  Позначки, що рахуються з журналів підготовки (ns-fullflags.py, рішення головної 02.10.2026): шов,
+        гірший за схвалений оператором, і зріз корінця без ниток. Скрипт не відпрацював — це ПОЗНАЧКА,
+        а не «чисто».                                                                                #>
+    $ef = @(& $py (Join-Path $PSScriptRoot "ns-fullflags.py") "--work" $work "--issue" $issueDir 2>&1 | ForEach-Object { "$_" })
+    if ($LASTEXITCODE -ne 0) { return @("додаткові позначки не пораховано (ns-fullflags, код $LASTEXITCODE): " + ($ef -join " ")) }
+    return @($ef | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })
+}
+
+# --- -Reflag: перерахувати позначки готового номера, нічого не збираючи ------
+# Позначки шва й зрізу без ниток з'явилися, коли частину року вже було зібрано; вони рахуються з того,
+# що лишається після прибирання (prepare.log, prepare.json), тож перебудовувати номер не треба.
+# Решта позначок full.json лишається як була. Стан міняється лише між done і review.
+if ($Reflag) {
+    $extraRx = '^(шов гірший за схвалений|зріз корінця .* без ниток|УВАГА, ЗРІЗ БІЛЯ ДРУКУ|додаткові позначки не пораховано)'
+    $old = $null
+    if (Test-Path $fullJson) { try { $old = Get-Content $fullJson -Raw -Encoding UTF8 | ConvertFrom-Json } catch { } }
+    if (-not $old -or $old.stage -ne "done") { Write-Host "Номер ${Seq}: повний шлях не завершено (full.json: $(if ($old) { $old.stage } else { 'немає' })) — позначки не перераховано." -ForegroundColor Yellow; exit 1 }
+    $kept = @($old.flags | Where-Object { $_ -and $_ -notmatch $extraRx })
+    $newFlags = @($kept) + @(Get-NsExtraFlags)
+    $wasN = @($old.flags | Where-Object { $_ }).Count
+    $old.flags = $newFlags
+    $old.flags_n = $newFlags.Count
+    $curState = Get-NsIssueState $man
+    $wantState = if ($newFlags.Count -eq 0) { "done" } else { "review" }
+    if ($curState -in @("done", "review") -and $curState -ne $wantState) {
+        Set-NsIssueState -IssueDir $issueDir -Manifest $man -State $wantState -Note ("ns-full -Reflag: позначок {0} (було {1})" -f $newFlags.Count, $wasN)
+        $curState = $wantState
+    }
+    $old.state = $curState
+    $old | ConvertTo-Json -Depth 6 | Set-Content $fullJson -Encoding UTF8
+    Write-Log ("[{0}] -Reflag {1}: позначок {2} (було {3}); стан {4}" -f (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"), $Seq, $newFlags.Count, $wasN, $curState) $(if ($newFlags.Count) { "Yellow" } else { "Green" })
+    foreach ($f in $newFlags) { Write-Log ("    ! " + $f) Yellow }
+    exit 0
+}
+"" | Set-Content $logf -Encoding UTF8
 
 $full = [ordered]@{ seq = $Seq; date = $man.date; year = $man.year; pages = @($man.pages).Count; stage = "started"; started = $t0.ToString("s") }
 function Save-Full { param([string]$Stage) $full.stage = $Stage; $full | ConvertTo-Json -Depth 6 | Set-Content $fullJson -Encoding UTF8 }
@@ -192,6 +230,7 @@ foreach ($u in @($prep.pad_review)) { if ($u) { $flags += ("доданий па�
 foreach ($u in $marginOver) { $flags += ("поля друку > 2 мм: " + $u) }
 foreach ($u in $qcFlags) { $flags += ("qc: " + $u) }
 foreach ($u in $esFlags) { $flags += ("edgescan: " + $u) }
+foreach ($u in @(Get-NsExtraFlags)) { if ($u) { $flags += $u } }
 $full.margins = $marginSum
 $full.pad_report = @($prep.pad_report)
 $full.edge = $prep.edge
