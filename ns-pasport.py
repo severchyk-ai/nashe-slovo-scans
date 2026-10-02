@@ -224,6 +224,39 @@ def main():
         w("_Друк до краю не міряно: запусти `python ns-pasport.py %d --design` (кеш — `%s`)._" % (year, design_cache))
         w("")
 
+    # Ширина доданого паперу (слово оператора 02.10.2026: на 2277 стор. 1 і 5 зліва 7,3 і 5,4 мм доданого —
+    # «дуже помітно», хоча шов за мірилом добрий: мірило міряє стик, око бачить смугу). Понад 4 мм —
+    # позначка номера (ns-fullflags); тут довідкою — усі боки понад 3 мм, із prepare.log.
+    spec = importlib.util.spec_from_file_location("ns_fullflags", os.path.join(HERE, "ns-fullflags.py"))
+    ff = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ff)
+    pads, no_table = [], []
+    for it in done:
+        pl = os.path.join(WORK, str(it["seq"]), "prepare.log")
+        pw = ff.pad_widths(pl) if os.path.exists(pl) else None
+        if pw is None:
+            no_table.append(it["seq"])
+            continue
+        pads += [(v, it["seq"], p, s) for p, s, v in pw]
+    if done:
+        w("## Доповнення папером — усі боки понад 3 мм")
+        w("")
+        npages = sum(len(it["man"].get("pages") or []) for it in done) - sum(
+            len(it["man"].get("pages") or []) for it in done if it["seq"] in no_table)
+        for lim in (4.0, 3.0, 2.0):
+            sides = [x for x in pads if x[0] > lim]
+            w("- понад %g мм: %d боків на %d сторінках (із %d)" % (lim, len(sides), len({(x[1], x[2]) for x in sides}), npages))
+        if no_table:
+            w("- без таблиці доповнення в prepare.log (не пораховано): %s" % ", ".join(str(x) for x in no_table))
+        w("")
+        big = sorted((x for x in pads if x[0] > 3.0), reverse=True)
+        if big:
+            w("| мм | № | стор. | бік |")
+            w("|---|---|---|---|")
+            for v, s, p, side in big:
+                w("| %s%.1f%s | %d | %d | %s |" % ("**" if v > 4.0 else "", v, "**" if v > 4.0 else "", s, p, ff.SIDE[side]))
+            w("")
+
     if man_year:
         w("## Лише вручну")
         w("")

@@ -58,7 +58,7 @@ function Get-NsExtraFlags {
 # що лишається після прибирання (prepare.log, prepare.json), тож перебудовувати номер не треба.
 # Решта позначок full.json лишається як була. Стан міняється лише між done і review.
 if ($Reflag) {
-    $extraRx = '^(шов гірший за |зріз корінця .* без ниток|УВАГА, ЗРІЗ БІЛЯ ДРУКУ|додаткові позначки не пораховано)'
+    $extraRx = '^(шов гірший за |доповнення [\d,]+ мм|зріз корінця .* без ниток|УВАГА, ЗРІЗ БІЛЯ ДРУКУ|додаткові позначки не пораховано)'
     $old = $null
     if (Test-Path $fullJson) { try { $old = Get-Content $fullJson -Raw -Encoding UTF8 | ConvertFrom-Json } catch { } }
     if (-not $old -or $old.stage -ne "done") { Write-Host "Номер ${Seq}: повний шлях не завершено (full.json: $(if ($old) { $old.stage } else { 'немає' })) — позначки не перераховано." -ForegroundColor Yellow; exit 1 }

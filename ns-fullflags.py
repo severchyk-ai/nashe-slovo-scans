@@ -14,6 +14,11 @@ prep / render: prepare.log (посторінкова таблиця шва ві�
    ниток 2001-2003) АБО на сторінці з друком до краю (ns-designscan >= 40 %; смуга скла, ширша за 4 мм,
    дає те саме число — 2268/6). У рядку — відстань від лінії зрізу до друку (початок друку за
    ns-spinescan мінус зріз); менше 1,5 мм — рядок починається з «УВАГА».
+3. ДОПОВНЕННЯ ширше за 4,0 мм (слово оператора 02.10.2026, вечір): на 2277 стор. 1 і 5 зліва додано 7,3 і
+   5,4 мм паперу — «дуже помітно, відрізняється від усієї решти сторінки», хоча шов там «добрий»
+   (0,18/0,67; 0,31/0,52). Мірило шва міряє СТИК (сусідні смуги), а око бачить СМУГУ цілком проти сторінки;
+   на схваленій 2277/7 доданого 4,2 мм. Мірила «смуга проти паперу сторінки» ще немає — поки що позначка
+   за шириною.
 Код 0 — відпрацював; 2 — немає даних (prepare.log / prepare.json / таблиці шва): тоді ns-full ставить
 позначку «не пораховано», а не «чисто».
 """
@@ -32,6 +37,7 @@ except Exception:
 
 SEAM_MED, SEAM_P90 = 1.00, 1.50          # поріг оператора 02.10.2026 (вечір), поки що — до розподілу по 2001
 CUT_MAX_MM = 8.5                         # стеля заміру ниток 2001-2003
+PAD_MAX_MM = 4.0                         # доданий папір, ширший за це, оператор бачить смугою (2277/1, /5 ліво)
 DESIGN_PCT = 40.0
 SIDE = {"L": "ліво", "R": "право", "T": "верх", "B": "низ"}
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -60,6 +66,36 @@ def seam_flags(log_path):
                 out.append("шов гірший за поріг (%s/%s): стор. %d %s — |dL*| мед./90-й %s/%s"
                            % (num(SEAM_MED), num(SEAM_P90), int(m.group(1)), SIDE[s.group(1)], num(med), num(p90)))
     return out if rows else None
+
+
+def pad_widths(log_path):
+    """[(стор., бік, мм)] — скільки паперу ДОДАНО з кожного боку (лише додатні), з ОСТАННЬОЇ таблиці
+    ns-padreport у prepare.log (стовпець «доп. L/R/T/B, мм»); None — таблиці немає."""
+    with open(log_path, encoding="utf-8-sig", errors="replace") as f:
+        lines = f.read().splitlines()
+    start = max((i for i, l in enumerate(lines) if l.startswith("стор.") and "доп. L/R/T/B" in l), default=None)
+    if start is None:
+        return None
+    out, rows = [], 0
+    for l in lines[start + 1:]:
+        m = re.match(r"^p(\d\d)\s+([+-]\d+\.\d+)\s+([+-]\d+\.\d+)\s+([+-]\d+\.\d+)\s+([+-]\d+\.\d+)", l)
+        if not m:
+            break
+        rows += 1
+        for side, v in zip("LRTB", m.groups()[1:]):
+            if float(v) > 0:
+                out.append((int(m.group(1)), side, float(v)))
+    return out if rows else None
+
+
+def pad_flags(log_path):
+    """Позначка «доповнення N мм» на бік, де доданого паперу більше за PAD_MAX_MM; None — таблиці немає."""
+    pads = pad_widths(log_path)
+    if pads is None:
+        return None
+    return ["доповнення %s мм: стор. %d %s (доданого паперу більше за %s мм)"
+            % (("%.1f" % v).replace(".", ","), p, SIDE[s], ("%g" % PAD_MAX_MM).replace(".", ","))
+            for p, s, v in pads if v > PAD_MAX_MM]
 
 
 def cut_flags(prep, issue_dir):
@@ -119,10 +155,11 @@ def main():
     with open(pj, encoding="utf-8-sig") as f:
         prep = json.load(f)
     seams = seam_flags(pl)
-    if seams is None:
+    pads = pad_flags(pl)
+    if seams is None or pads is None:
         print("у prepare.log немає таблиці шва (ns-padreport)", file=sys.stderr)
         sys.exit(2)
-    for l in seams + cut_flags(prep, a.issue):
+    for l in seams + pads + cut_flags(prep, a.issue):
         print(l)
 
 
