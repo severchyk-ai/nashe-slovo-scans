@@ -18,7 +18,8 @@ Smart App Control на цій машині час від часу блокує �
     python ns_modcheck.py --lock-check  звірити встановлене з requirements.lock (0 — без розбіжностей)
 Код виходу 0 — усе вантажиться (друкує версії); 42 — щось не вантажиться: рядок «ЗУПИНКА: …» у stdout.
 Блокування НЕ обходити (копії DLL, інший Python, вимкнення захисту) — сказати оператору.
-NS_TEST_BLOCK=cv2 (змінна середовища) удає блокування названих модулів — лише щоб випробувати зупинку.
+NS_TEST_BLOCK=cv2 (змінна середовища) удає блокування названих модулів — лише щоб випробувати зупинку;
+NS_TEST_BLOCK_FILE=<файл із назвами модулів> — те саме, доки файл існує (проба очікування в пакеті).
 """
 import importlib
 import os
@@ -36,6 +37,9 @@ def probe(mods):
     """[(модуль, чи це блокування Windows, текст помилки)] для модулів, що не вантажаться."""
     bad = []
     fake = [x for x in os.environ.get("NS_TEST_BLOCK", "").split(",") if x]   # лише для проб зупинки
+    ff = os.environ.get("NS_TEST_BLOCK_FILE", "")      # те саме, доки існує файл (проба «блокування минуло»)
+    if ff and os.path.exists(ff):
+        fake += [x for x in open(ff, encoding="utf-8").read().replace(",", " ").split() if x]
     for m in mods:
         if m in fake:
             bad.append((m, True, "ImportError: DLL load failed while importing %s: An Application Control policy has "

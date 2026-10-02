@@ -107,14 +107,47 @@ function Test-NsPyModules {
         кожним номером у довгому прогоні. $false — уже надруковано «ЗУПИНКА: …»;
         викликач робить exit $script:NS_EXIT_BLOCKED. Набір: img (numpy, PIL,
         cv2) або ocr (+ pikepdf, img2pdf, ocrmypdf). НЕ обходити блокування.   #>
-    param([string]$Set = "img", [string]$For = "роботу")
+    param([string]$Set = "img", [string]$For = "роботу", [switch]$Quiet)
     $env:PYTHONIOENCODING = "utf-8"
     $mo = @(& python (Join-Path $PSScriptRoot "ns_modcheck.py") $Set "--what" $For 2>&1 | ForEach-Object { "$_" })
     if ($LASTEXITCODE -eq 0) { return $true }
+    if ($Quiet) { return $false }
     foreach ($l in $mo) { Write-Host $l -ForegroundColor Red }
     if (-not (($mo -join " ") -match 'ЗУПИНКА')) {
         Write-Host "ЗУПИНКА: перевірка модулів Python не відпрацювала (код $LASTEXITCODE) — $For не виконано." -ForegroundColor Red
     }
+    return $false
+}
+
+function Wait-NsPyModules {
+    <#  Для ДОВГИХ прогонів (ns-prepare-batch, ns-issue -All): якщо модулі заблоковано —
+        не зупинятися одразу, а чекати й пробувати кожні EveryMin хвилин до MaxHours годин
+        (рішення головної 02.10.2026: блокування досі були короткі — 30.09 17:39-17:46;
+        01.10 22:06, о 00:13 уже працювало). Кожна подія — рядок із часом на екран і в
+        NS_WORK\_opencv_block.log. $true — модулі вантажаться (одразу або дочекалися);
+        $false — не дочекалися: уже надруковано «ЗУПИНКА», викликач виходить із кодом 42.
+        Номер, на якому заблокувало, викликач починає ЗАНОВО, а не продовжує з середини.
+        NS_TEST_WAIT_SEC / NS_TEST_WAIT_MAX_SEC — крок і межа в секундах, лише для проб.   #>
+    param([string]$Set = "img", [string]$For = "роботу", [int]$EveryMin = 10, [double]$MaxHours = 6)
+    if (Test-NsPyModules -Set $Set -For $For -Quiet) { return $true }
+    $every = $EveryMin * 60; $max = [int]($MaxHours * 3600)
+    if ($env:NS_TEST_WAIT_SEC) { $every = [int]$env:NS_TEST_WAIT_SEC }
+    if ($env:NS_TEST_WAIT_MAX_SEC) { $max = [int]$env:NS_TEST_WAIT_MAX_SEC }
+    $t0 = Get-Date; $until = $t0.AddSeconds($max); $k = 0
+    $blf = Join-Path $script:NS_WORK "_opencv_block.log"
+    $say = { param($t, $c) Write-Host $t -ForegroundColor $c; try { Add-Content -Path $blf -Value $t -Encoding UTF8 } catch { } }
+    & $say ("[{0}] OpenCV заблоковано Windows (Smart App Control) — {1}: чекаю, пробую кожні {2} до {3}" -f $t0.ToString("yyyy-MM-dd HH:mm:ss"), $For, $(if ($every -ge 60) { "{0:N0} хв" -f ($every / 60) } else { "$every с" }), $until.ToString("HH:mm")) "Yellow"
+    while ((Get-Date) -lt $until) {
+        Start-Sleep -Seconds $every
+        $k++
+        if (Test-NsPyModules -Set $Set -For $For -Quiet) {
+            & $say ("[{0}] блокування минуло через {1:N0} хв (спроба {2}) — продовжую: {3}" -f (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"), ((Get-Date) - $t0).TotalMinutes, $k, $For) "Green"
+            return $true
+        }
+        & $say ("[{0}] спроба {1}: досі заблоковано" -f (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"), $k) "DarkYellow"
+    }
+    $null = Test-NsPyModules -Set $Set -For $For      # надрукує «ЗУПИНКА: …» із текстом помилки
+    & $say ("[{0}] ЗУПИНКА: OpenCV заблоковано вже {1:N1} год — {2} НЕ ЗРОБЛЕНО. Не обходити; сказати оператору." -f (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"), ((Get-Date) - $t0).TotalHours, $For) "Red"
     return $false
 }
 

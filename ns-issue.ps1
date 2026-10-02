@@ -62,25 +62,39 @@ foreach ($s in $targets) {
 
     $started = Get-Date
     $ok = $true
+    $try = 0
 
-    foreach ($stage in @(
-        @{ name = "3  геометрія"; script = "ns-prep.ps1"   },
-        @{ name = "3b вигляд";    script = "ns-render.ps1" },
-        @{ name = "5-6 PDF";      script = "ns-build.ps1"  }
-    )) {
-        # Розсипати треба ХЕШ-ТАБЛИЦЮ, не масив: масив передає елементи
-        # позиційно, і рядок "-Seq" прилітає в $Seq як значення замість імені
-        # параметра («Cannot convert value "-Seq" to type System.Int32»).
-        $callArgs = @{ Seq = $s }
-        if ($Force) { $callArgs.Force = $true }
-        if ($NoOcr -and $stage.script -eq "ns-build.ps1") { $callArgs.NoOcr = $true }
-        & "$PSScriptRoot\$($stage.script)" @callArgs
-        if ($LASTEXITCODE -ne 0) {
-            if ($LASTEXITCODE -eq $script:NS_EXIT_BLOCKED) { $blocked = $true }
-            Write-Host "Етап «$($stage.name)» завершився помилкою на номері $s." -ForegroundColor Red
-            $ok = $false
-            break
+    # Windows часом блокує OpenCV (02.10.2026): перед кожним номером дочекатися модулів (пробувати
+    # кожні 10 хв до 6 год); заблокувало ПОСЕРЕД номера — почати номер заново (-Force), до 3 разів.
+    while ($true) {
+        $try++
+        if (-not (Wait-NsPyModules -Set $(if ($NoOcr) { "img" } else { "ocr" }) -For "номер $s")) { $blocked = $true; $ok = $false; break }
+        $ok = $true; $hit42 = $false
+        foreach ($stage in @(
+            @{ name = "3  геометрія"; script = "ns-prep.ps1"   },
+            @{ name = "3b вигляд";    script = "ns-render.ps1" },
+            @{ name = "5-6 PDF";      script = "ns-build.ps1"  }
+        )) {
+            # Розсипати треба ХЕШ-ТАБЛИЦЮ, не масив: масив передає елементи
+            # позиційно, і рядок "-Seq" прилітає в $Seq як значення замість імені
+            # параметра («Cannot convert value "-Seq" to type System.Int32»).
+            $callArgs = @{ Seq = $s }
+            if ($Force -or $try -gt 1) { $callArgs.Force = $true }
+            if ($NoOcr -and $stage.script -eq "ns-build.ps1") { $callArgs.NoOcr = $true }
+            & "$PSScriptRoot\$($stage.script)" @callArgs
+            if ($LASTEXITCODE -ne 0) {
+                if ($LASTEXITCODE -eq $script:NS_EXIT_BLOCKED) { $hit42 = $true }
+                Write-Host "Етап «$($stage.name)» завершився помилкою на номері $s." -ForegroundColor Red
+                $ok = $false
+                break
+            }
         }
+        if ($hit42 -and $try -lt 3) {
+            Write-Host "OpenCV заблоковано посеред номера $s — почну номер заново (повтор $try з 2)." -ForegroundColor Yellow
+            continue
+        }
+        if ($hit42) { $blocked = $true }
+        break
     }
     # OpenCV заблоковано Windows (код 42 від етапу): решта номерів упала б так само — зупинити весь прогін
     if ($blocked) {

@@ -28,14 +28,15 @@ $t0 = Get-Date
 $queue = [System.Collections.Queue]::new(); foreach ($n in $list) { $queue.Enqueue($n) }
 $running = @{}
 $failed = @()
-$blocked = $false; $notDone = @()
+$blocked = $false; $notDone = @(); $tries = @{}
 Write-Host ("Пакет: {0} ({1} номерів), одночасно {2}" -f ($list -join ", "), $list.Count, $Parallel) -ForegroundColor Cyan
 
 while ($queue.Count -gt 0 -or $running.Count -gt 0) {
     while ($queue.Count -gt 0 -and $running.Count -lt $Parallel) {
-        # перед КОЖНИМ номером: Windows часом блокує OpenCV посеред ночі (01.10.2026 22:06) — далі не йти,
+        # перед КОЖНИМ номером: Windows часом блокує OpenCV посеред ночі (01.10.2026 22:06). Чекати й
+        # пробувати кожні 10 хв до 6 год (Wait-NsPyModules, рішення головної 02.10.2026); не дочекалися —
         # решту черги назвати «не зроблено», а не дати кожному номерові впасти окремо
-        if ($blocked -or -not (Test-NsPyModules -For ("номери " + (@($queue.ToArray()) -join ", ")))) {
+        if ($blocked -or -not (Wait-NsPyModules -For ("номери " + (@($queue.ToArray()) -join ", ")))) {
             $blocked = $true; $notDone += @($queue.ToArray()); $queue.Clear(); break
         }
         $n = [int]$queue.Dequeue()
@@ -48,9 +49,19 @@ while ($queue.Count -gt 0 -or $running.Count -gt 0) {
     foreach ($n in @($running.Keys)) {
         $p = $running[$n]
         if ($p.HasExited) {
+            if ($p.ExitCode -eq $script:NS_EXIT_BLOCKED) {
+                # заблоковано ПОСЕРЕД номера: почати його заново (ns-prepare сам іде з prep -Force), не
+                # продовжувати з середини; на початок черги — там на нього чекає Wait-NsPyModules. До 3 разів.
+                $running.Remove($n)
+                $tries[$n] = 1 + [int]$tries[$n]
+                if ($tries[$n] -le 3 -and -not $blocked) {
+                    Write-Host ("  [{0}] {1}: OpenCV заблоковано посеред номера — почну заново (повтор {2} з 3)" -f (Get-Date).ToString("HH:mm:ss"), $n, $tries[$n]) -ForegroundColor Yellow
+                    $q2 = [System.Collections.Queue]::new(); $q2.Enqueue($n); foreach ($x in $queue.ToArray()) { $q2.Enqueue($x) }; $queue = $q2
+                } else { $blocked = $true; $notDone += $n }
+                continue
+            }
             $ok = (Test-Path (Join-Path $script:NS_WORK "$n\prepare.json")) -and ((Get-Item (Join-Path $script:NS_WORK "$n\prepare.json")).LastWriteTime -gt $t0)
             if (-not $ok) { $failed += $n }
-            if ($p.ExitCode -eq $script:NS_EXIT_BLOCKED) { $blocked = $true }
             Write-Host ("  [{0}] {1}: {2} (код {3})" -f (Get-Date).ToString("HH:mm:ss"), $n, $(if ($ok) { "готово" } else { "ЗБІЙ — див. NS_WORK\$n\prepare.log" }), $p.ExitCode) -ForegroundColor $(if ($ok) { "Green" } else { "Red" })
             $running.Remove($n)
         }
