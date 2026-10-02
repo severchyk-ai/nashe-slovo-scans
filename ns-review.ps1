@@ -60,6 +60,17 @@ function Get-ReviewInfo {
         foreach ($u in @($prep.render_not_unified)) { if ($u) { $flags += ("не зведено до спільного розміру: " + $u) } }
         foreach ($u in @($prep.frame_uneven)) { if ($u) { $flags += ("нерівна рамка: " + $u) } }
     }
+    # Номер, що пройшов повний шлях (ns-full, 02.10.2026): дивитися ГОТОВИЙ PDF з NS_PDF і позначки з
+    # full.json (там і перевірки готового PDF). PDF без OCR від давнішої підготовки — уже не про цей номер.
+    $fj = Join-Path $script:NS_WORK "$SeqNo\full.json"
+    if ((Test-Path $fj) -and (-not (Test-Path $pj) -or (Get-Item $fj).LastWriteTime -ge (Get-Item $pj).LastWriteTime)) {
+        $fullInfo = $null
+        try { $fullInfo = Get-Content $fj -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
+        if ($fullInfo -and $fullInfo.stage -eq "done" -and $fullInfo.pdf -and (Test-Path $fullInfo.pdf)) {
+            $pdf = [string]$fullInfo.pdf
+            $flags = @($fullInfo.flags | Where-Object { $_ })
+        }
+    }
     $notes = @()
     if ($man.PSObject.Properties.Name -contains 'review_notes') { $notes = @($man.review_notes) }
     [pscustomobject]@{ Seq = $SeqNo; Dir = $dir; Manifest = $man; Prep = $prep; Pdf = $pdf; Flags = $flags; Notes = $notes; State = (Get-NsIssueState $man) }
@@ -79,7 +90,7 @@ function Show-Info {
     param($Info)
     Write-Host ""
     Write-Host ("  НОМЕР {0}  ({1}, {2} стор.)  стан: {3}" -f $Info.Seq, $Info.Manifest.date, @($Info.Manifest.pages).Count, $Info.State) -ForegroundColor Cyan
-    if ($Info.Pdf) { Write-Host ("  PDF без OCR: {0}" -f $Info.Pdf) } else { Write-Host "  PDF без OCR: НЕМАЄ (запусти ns-prepare -Seq $($Info.Seq))" -ForegroundColor Yellow }
+    if ($Info.Pdf) { Write-Host ("  {0}: {1}" -f $(if ($Info.Pdf -like "$($script:NS_PDF)*") { "PDF (готовий) " } else { "PDF без OCR" }), $Info.Pdf) } else { Write-Host "  PDF без OCR: НЕМАЄ (запусти ns-prepare -Seq $($Info.Seq))" -ForegroundColor Yellow }
     if ($Info.Prep -and $Info.Prep.edge) { Write-Host ("  page_edge  : {0}" -f $Info.Prep.edge) -ForegroundColor DarkGray }
     if ($Info.Prep -and $Info.Prep.holes) {
         Write-Host ("  дірки      : зарощено {0} із {1}" -f $Info.Prep.holes.filled, $Info.Prep.holes.expected) -ForegroundColor DarkGray

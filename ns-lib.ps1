@@ -97,6 +97,9 @@ function Initialize-NsConsole {
 }
 
 $script:NS_EXIT_BLOCKED = 42
+# ns-full: підготовку (prep, render) зроблено, а PDF з OCR зібрати не можна — pikepdf/ocrmypdf заблоковано.
+# Не збій і не «номер заново»: коли блокування мине — ns-full -BuildOnly (ns-prepare-batch -Full робить сам).
+$script:NS_EXIT_OCR_WAIT = 43
 
 # Номери «ЛИШЕ ВРУЧНУ» (рішення оператора 28.09 і 02.10.2026): новий дизайн (друк і плашки до краю),
 # вкладки, повороти, свій порядок, не 10 сторінок, календарі. Пакетні прогони (ns-prepare-batch,
@@ -112,6 +115,75 @@ function Get-NsManual {
         }
     }
     return $h
+}
+
+# Ручні page_edge у ЗВИЧАЙНИХ номерах (рішення головної 02.10.2026): ns-prepare міряє нитки й пише
+# page_edge заново; знаки з цього файла він лишає ПОВЕРХ заміру (той самий бік сторінки — замість
+# заміряного). Стовпці: seq, keep ("7T1.5 …"), reset (1 — решту знаків не із заміру відкинути як
+# застарілі), reason. Номера у файлі немає, а в маніфесті є знак не із заміру — ns-prepare зупиняється.
+# Під git, а не в NS_WORK: походження знака не має залежати від теки, яку дозволено видаляти.
+$script:NS_EDGE_KEEP_FILE = Join-Path $PSScriptRoot "ns-edge-keep.csv"
+function Get-NsEdgeKeep {
+    <#  @{ Keep = @("7T1.5", …); Reset = $bool; Reason = "…" } для номера або $null.  #>
+    param([int]$Seq)
+    if (-not (Test-Path $script:NS_EDGE_KEEP_FILE)) { return $null }
+    foreach ($r in @(Import-Csv -Path $script:NS_EDGE_KEEP_FILE -Encoding UTF8)) {
+        if ("$($r.seq)" -match '^\d+$' -and [int]$r.seq -eq $Seq) {
+            $toks = @("$($r.keep)" -split '[,\s]+' | Where-Object { $_ } | ForEach-Object { $_.ToUpper() })
+            foreach ($t in $toks) { if ($t -notmatch '^\d+[LRTB][\d.]+$') { throw "ns-edge-keep.csv, номер ${Seq}: не зрозумів знак '$t'" } }
+            return [pscustomobject]@{ Keep = $toks; Reset = ("$($r.reset)".Trim() -eq "1"); Reason = "$($r.reason)" }
+        }
+    }
+    return $null
+}
+
+function Merge-NsEdge {
+    <#  Замір + знаки, які треба лишити: знак Keep заміняє заміряний знак того самого боку тієї самої
+        сторінки, решта заміру — як є. Порядок: за сторінкою.                                       #>
+    param([string]$Measured, [string[]]$Keep)
+    $keyOf = { param($t) if ($t -match '^(\d+)([LRTBlrtb])') { "{0:D3}{1}" -f [int]$Matches[1], $Matches[2].ToUpper() } else { "" } }
+    $keepKeys = @{}; foreach ($t in @($Keep)) { if ($t) { $keepKeys[(& $keyOf $t)] = $true } }
+    $all = @(@("$Measured" -split '[,\s]+' | Where-Object { $_ -and -not $keepKeys.ContainsKey((& $keyOf $_)) }) + @($Keep | Where-Object { $_ }))
+    return (@($all | Sort-Object { & $keyOf $_ }) -join " ")
+}
+
+function Get-NsEdgeMeasured {
+    <#  @{ "1L4.5" = $true; … } — знаки page_edge, що їх дав ЗАМІР ниток. Джерело істини — поле
+        page_edge_measured маніфесту (02.10.2026): є воно — лише воно. Немає (номер підготовлено до появи
+        поля) — NS_WORK\<N>\spine.json. Решта page_edge — слово оператора.                          #>
+    param($Manifest, [int]$Seq)
+    $h = @{}
+    if ($Manifest -and $Manifest.PSObject.Properties.Name -contains 'page_edge_measured' -and $Manifest.page_edge_measured) {
+        foreach ($tk in ("$($Manifest.page_edge_measured)" -split '[,\s]+')) { if ($tk) { $h[$tk.ToUpper()] = $true } }
+        return $h
+    }
+    $sjf = Join-Path (Join-Path $script:NS_WORK "$Seq") "spine.json"
+    if (Test-Path $sjf) {
+        try { $sj = Get-Content $sjf -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $sj = $null }
+        if ($sj -and $sj.edge) { foreach ($tk in ("$($sj.edge)" -split '[,\s]+')) { if ($tk) { $h[$tk.ToUpper()] = $true } } }
+    }
+    return $h
+}
+
+function Set-NsEdgeMeasured {
+    <#  Записати в маніфест page_edge_measured — які знаки чинного page_edge дав замір ниток (рішення
+        головної 02.10.2026: походження зрізів не має жити лише в NS_WORK\<N>\spine.json — ту теку дозволено
+        видаляти, і тоді ns-prepare приймав би власний замір за слово оператора). Пише ЛИШЕ ns-prepare
+        (і разове заповнення ns-edgemeasured-fill.ps1 з наявних spine.json). Слово оператора й знаки з
+        ns-edge-keep.csv сюди НЕ потрапляють — вони лишаються тільки в page_edge. Сторінки не змінюються:
+        хеші звіряються до й після запису. Повертає записаний рядок; збій — throw.                    #>
+    param([string]$IssueDir, [string]$Measured)
+    $m = Read-NsManifest -IssueDir $IssueDir
+    $badBefore = @($m.pages | Where-Object { -not (Test-NsPageDurable -IssueDir $IssueDir -PageEntry $_) })
+    if ($badBefore.Count) { throw "page_edge_measured НЕ записано: сторінки не збігаються з маніфестом ($(@($badBefore | ForEach-Object { $_.file }) -join ', '))" }
+    $val = (@("$Measured" -split '[,\s]+' | Where-Object { $_ } | ForEach-Object { $_.ToUpper() }) -join " ")
+    if ($val) { $m | Add-Member -NotePropertyName page_edge_measured -NotePropertyValue $val -Force }
+    elseif ($m.PSObject.Properties.Name -contains 'page_edge_measured') { $m.PSObject.Properties.Remove('page_edge_measured') }
+    Write-NsManifest -IssueDir $IssueDir -Manifest $m
+    $m = Read-NsManifest -IssueDir $IssueDir
+    $badAfter = @($m.pages | Where-Object { -not (Test-NsPageDurable -IssueDir $IssueDir -PageEntry $_) })
+    if ($badAfter.Count) { throw "після запису page_edge_measured сторінки не збігаються з маніфестом — перевірити!" }
+    return $val
 }
 
 function Test-NsPyModules {
@@ -1291,6 +1363,12 @@ function Set-NsIssueState {
 function Set-NsRegistryRow {
     <#  Додати або оновити рядок реєстру за seq_first. #>
     param($Manifest, [string]$Status, [long]$Bytes = 0)
+    # Прочитати-змінити-записати під спільним замком: пакетні прогони (ns-prepare-batch) ведуть 2-4 номери
+    # ОКРЕМИМИ процесами, і без замка два записи водночас губили б рядок одного з них або билися за .tmp.
+    $mx = New-Object System.Threading.Mutex($false, "NsRegistryWrite")
+    $got = $false
+    try {
+    try { $got = $mx.WaitOne(60000) } catch [System.Threading.AbandonedMutexException] { $got = $true }
     $rows = @(Read-NsRegistry)
     $row = [pscustomobject]@{
         seq_first        = $Manifest.seq_first
@@ -1309,6 +1387,7 @@ function Set-NsRegistryRow {
     }
     $rows = @($rows | Where-Object { [int]$_.seq_first -ne [int]$Manifest.seq_first })
     Write-NsRegistry -Rows (@($rows) + $row)
+    } finally { if ($got) { $mx.ReleaseMutex() }; $mx.Dispose() }
 }
 
 function Sync-NsRegistry {

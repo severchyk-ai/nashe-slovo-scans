@@ -452,19 +452,10 @@ if ($PaperPad) {
     # було мало: він пишеться наприкінці ns-prepare, тож на ПЕРШОМУ проході номера його ще немає, і всі
     # зрізи корінця ставали «словом оператора» — без дорізання бруду й без рампи (знайдено 02.10.2026,
     # коли стандарт ставав умовчанням; у пробі prepare.json уже лежав від 28.09).
-    $measuredTok = @{}
-    $sjf = Join-Path (Join-Path $script:NS_WORK "$Seq") "spine.json"
-    if (Test-Path $sjf) {
-        try { $sj = Get-Content $sjf -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $sj = $null }
-        if ($sj -and $sj.edge) { foreach ($tk in ("$($sj.edge)" -split '[,\s]+')) { if ($tk) { $measuredTok[$tk.ToUpper()] = $true } } }
-    }
-    $pjf = Join-Path (Join-Path $script:NS_WORK "$Seq") "prepare.json"
-    if (Test-Path $pjf) {
-        try { $pj = Get-Content $pjf -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $pj = $null }
-        if ($pj -and $pj.edge_source -eq "ns-spinescan" -and $pj.spine -and $pj.spine.edge) {
-            foreach ($tk in ($pj.spine.edge -split '[,\s]+')) { if ($tk) { $measuredTok[$tk.ToUpper()] = $true } }
-        }
-    }
+    # З 02.10.2026 походження записано в маніфесті (page_edge_measured, пише ns-prepare) — NS_WORK дозволено
+    # видаляти, а зі spine.json зникало б і знання, що зріз — із заміру. Поле є — воно й вирішує;
+    # немає (номер підготовлено до 02.10) — spine.json (Get-NsEdgeMeasured).
+    $measuredTok = Get-NsEdgeMeasured -Manifest $manR -Seq $Seq
     # forced_cut (02.10.2026): слово оператора «зрізати N мм» (page_edge > 0) — бік зі слідами зшивання
     # (2316/10 R: «просто обрізати, рамка рівна»). ns-paperpad там так само нічого не ріже й не заливає,
     # але з -PadSeam 3 шов «папір | доданий» дістає рампу, як звичайний бік. page_edge 0 — «не чіпати».

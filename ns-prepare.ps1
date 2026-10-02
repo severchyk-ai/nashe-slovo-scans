@@ -59,21 +59,20 @@ Write-Log ("ПІДГОТОВКА {0} ({1}, {2} стор.)" -f $Seq, $man.date, @
 # page_edge у маніфесті, якого НЕ дав замір ниток (слово оператора: 2254, 2288 `7T1.5`, 2324 `1T5.5`;
 # виміри старої сесії: 2227, 2237), цей скрипт без -Edge ПЕРЕЗАПИСАВ би заміром — мовчки. Не стирати
 # мовчки й не застосовувати мовчки (02.10.2026): зупинитися й назвати. Із заміру — те, що є в spine.json.
+$edgeKeep = Get-NsEdgeKeep -Seq $Seq
 if (-not $Edge -and $man.PSObject.Properties.Name -contains 'page_edge' -and $man.page_edge) {
-    $oldMeasured = @{}
-    $osj = Join-Path $work "spine.json"
-    if (Test-Path $osj) {
-        try { $oe = (Get-Content $osj -Raw -Encoding UTF8 | ConvertFrom-Json).edge } catch { $oe = "" }
-        foreach ($tk in ("$oe" -split '[,\s]+')) { if ($tk) { $oldMeasured[$tk.ToUpper()] = $true } }
-    }
-    $handTok = @("$($man.page_edge)" -split '[,\s]+' | Where-Object { $_ -and -not $oldMeasured.ContainsKey($_.ToUpper()) })
+    # із заміру — page_edge_measured маніфесту (і spine.json, якщо номер підготовлено до появи цього поля)
+    $oldMeasured = Get-NsEdgeMeasured -Manifest $man -Seq $Seq
+    # знаки з ns-edge-keep.csv — відоме слово оператора: їх лишаємо поверх нового заміру, зупинки не треба
+    $keepKnown = @{}; foreach ($tk in @($edgeKeep.Keep)) { if ($tk) { $keepKnown[$tk] = $true } }
+    $handTok = @("$($man.page_edge)" -split '[,\s]+' | Where-Object { $_ -and -not $oldMeasured.ContainsKey($_.ToUpper()) -and -not $keepKnown.ContainsKey($_.ToUpper()) })
     if ($handTok.Count -gt 0) {
-        if ($ResetEdge) {
-            Write-Log ("    -ResetEdge: page_edge не із заміру ВІДКИНУТО: {0} (було в маніфесті: {1})" -f ($handTok -join " "), $man.page_edge) Yellow
+        if ($ResetEdge -or ($edgeKeep -and $edgeKeep.Reset)) {
+            Write-Log ("    {2}: page_edge не із заміру ВІДКИНУТО: {0} (було в маніфесті: {1})" -f ($handTok -join " "), $man.page_edge, $(if ($ResetEdge) { "-ResetEdge" } else { "ns-edge-keep.csv (reset)" })) Yellow
         } else {
             Write-Log ("ЗУПИНКА: у маніфесті {0} є page_edge НЕ із заміру ниток: {1}" -f $Seq, ($handTok -join " ")) Red
             Write-Log ("    увесь page_edge: {0}" -f $man.page_edge) Red
-            Write-Log "    ns-prepare перезаписав би його заміром. Слово оператора — задати явно: -Edge `"…`"; застаріле — -ResetEdge. Номер НЕ ЗРОБЛЕНО." Red
+            Write-Log "    ns-prepare перезаписав би його заміром. Слово оператора — рядок у ns-edge-keep.csv (лишити поверх заміру) або -Edge `"…`"; застаріле — -ResetEdge. Номер НЕ ЗРОБЛЕНО." Red
             exit 3
         }
     }
@@ -117,6 +116,13 @@ if ($Edge) {
     foreach ($it in @($sp.pages)) { foreach ($f in @($it.flags)) { Write-Log ("      стор. {0}: {1}" -f $it.n, $f) Yellow } }
     $summary.edge_source = "ns-spinescan"
     $summary.spine = $sp
+    # слово оператора з ns-edge-keep.csv — поверх заміру (той самий бік сторінки — замість заміряного).
+    # У spine.json лишається чистий замір, тож ns-render і далі бачить ці знаки як слово оператора.
+    if ($edgeKeep -and @($edgeKeep.Keep).Count -gt 0) {
+        $edge = Merge-NsEdge -Measured $edge -Keep $edgeKeep.Keep
+        $summary.edge_keep = @($edgeKeep.Keep)
+        Write-Log ("    page_edge: замір + ns-edge-keep.csv ({0}; {1}): {2}" -f ($edgeKeep.Keep -join " "), $edgeKeep.Reason, $edge) Yellow
+    }
 }
 $summary.edge = $edge
 
@@ -124,6 +130,16 @@ $summary.edge = $edge
 $pp = @{ Seq = $Seq; Force = $true; EdgeExtra = $edge }
 if ($hasBig) { $pp.FillHoles = $true }
 $null = Invoke-NsStep ("prep {0}-EdgeExtra (зріз корінця{1})" -f $(if ($hasBig) { "-FillHoles " } else { "" }), $(if ($hasBig) { ", заростання" } else { "" })) (Join-Path $PSScriptRoot "ns-prep.ps1") $pp
+# Походження зрізів — у маніфест (рішення головної 02.10.2026): які знаки щойно записаного page_edge дав
+# замір. Знаки з ns-edge-keep.csv — слово оператора, сюди не йдуть. З -Edge заміру не було — поле не чіпаємо.
+if ($summary.edge_source -eq "ns-spinescan") {
+    $keepSet = @{}; foreach ($tk in @($edgeKeep.Keep)) { if ($tk) { $keepSet[$tk] = $true } }
+    $measuredNow = (@("$edge" -split '[,\s]+' | Where-Object { $_ -and -not $keepSet.ContainsKey($_.ToUpper()) }) -join " ")
+    try { $mv = Set-NsEdgeMeasured -IssueDir $issueDir -Measured $measuredNow }
+    catch { Write-Log ("    ЗБІЙ: {0} — номер {1} НЕ ЗРОБЛЕНО." -f $_.Exception.Message, $Seq) Red; exit 1 }
+    $summary.edge_measured = $mv
+    Write-Log ("    page_edge_measured у маніфесті: {0}" -f $mv) Gray
+}
 $filled = 0; $left = 0; $holePages = @()
 $hd = Join-Path $work "holes"
 foreach ($f in @(Get-ChildItem $hd -Filter "p*_log.txt" -ErrorAction SilentlyContinue)) {
