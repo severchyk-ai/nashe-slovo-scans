@@ -16,12 +16,23 @@ param(
     [int[]]$Skip = @(),    # разом з -All: пропустити ці номери
     [switch]$Force,
     [switch]$NoOcr,
-    [switch]$KeepWork      # не прибирати похідні після успішної збірки
+    [switch]$KeepWork,     # не прибирати похідні після успішної збірки
+    [switch]$OldPath       # разом з -All / -Rebuild: свідомо йти цим, СТАРИМ шляхом (без заміру ниток)
 )
 if ($Rebuild) { $All = $true; $Force = $true }
 
 . "$PSScriptRoot\ns-lib.ps1"
 Initialize-NsConsole
+
+# З 02.10.2026 чинний шлях номера — ns-full / ns-prepare-batch -Full: замір ниток, зрізи корінця, стандарт.
+# Цей скрипт ниток НЕ міряє (бере page_edge з маніфесту), тож пакетом зібрав би номери 2003 року без зрізу
+# корінця, а зібрані за стандартом — перезібрав би повз замір. Пакетний запуск — лише свідомо, з -OldPath.
+if ($All -and -not $OldPath) {
+    Write-Host "ns-issue -All / -Rebuild — старий шлях БЕЗ заміру ниток; пакетом він більше не йде." -ForegroundColor Red
+    Write-Host "Чинний шлях: .\ns-prepare-batch.ps1 -Seq <номери> -Full   (один номер: .\ns-full.ps1 -Seq N)." -ForegroundColor Yellow
+    Write-Host "Якщо потрібен саме старий шлях — додай -OldPath." -ForegroundColor DarkGray
+    exit 1
+}
 
 if (-not $Seq -and -not $All) {
     Write-Host "Вкажи -Seq <номер> або -All." -ForegroundColor Red; exit 1

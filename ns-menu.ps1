@@ -247,19 +247,23 @@ try {
                 } else {
                     Write-Host "  Нових номерів для збірки немає — усі вже зібрані." -ForegroundColor Yellow
                 }
-                Write-Host "  Збірка триває близько 13 хвилин на номер." -ForegroundColor DarkGray
+                # З 02.10.2026 збирання йде ПОВНИМ ШЛЯХОМ (ns-full: замір ниток -> зрізи -> render за стандартом
+                # -> PDF з OCR -> перевірки), а не ns-issue: той не міряє нитки й зібрав би номер 2003 року без
+                # зрізу корінця. Номери «лише вручну» (ns-manual.csv) пакет пропускає — їх веде відділ
+                # інструментів. «Перезібрати все» з меню прибрано: воно йшло старим шляхом по всіх роках.
+                Write-Host "  Повний шлях: близько 17 хв один номер; пакетом по 4 водночас — 8 номерів за годину." -ForegroundColor DarkGray
+                Write-Host "  Номери «лише вручну» (новий дизайн, вкладки) пропускаються — їх збирає Claude." -ForegroundColor DarkGray
                 Write-Host ""
                 Write-Host "  [Enter]  зібрати нові"
                 Write-Host "  номер    зібрати один (можна вже зібраний — перезбереться)"
-                Write-Host "  R        ПЕРЕЗІБРАТИ ВСЕ наново — коли змінився сам конвеєр"
                 $which = Read-Host "  Вибір"
                 if ([string]::IsNullOrWhiteSpace($which)) {
-                    if ($a.ready.Count -gt 0) { & "$PSScriptRoot\ns-issue.ps1" -All }
+                    if ($a.ready.Count -gt 0) {
+                        & "$PSScriptRoot\ns-prepare-batch.ps1" -Seq @($a.ready | ForEach-Object { "$($_.seq_first)" }) -Full -Parallel 4
+                    }
                     else { Write-Host "  Нічого збирати." -ForegroundColor Yellow }
-                } elseif ($which -match '^[RrПп]') {
-                    & "$PSScriptRoot\ns-issue.ps1" -Rebuild
                 } elseif ($which -match '^\d+$') {
-                    & "$PSScriptRoot\ns-issue.ps1" -Seq ([int]$which) -Force
+                    & "$PSScriptRoot\ns-full.ps1" -Seq ([int]$which)
                 } else {
                     Write-Host "  Не зрозумів — скасовано." -ForegroundColor Yellow
                 }

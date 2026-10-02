@@ -274,6 +274,15 @@ def suggest(a, rows):
             if "cap" in it and it["cut"] > it["cap"]:
                 it["cut"] = it["cap"]
             it["flags"].append("Review: ниток не видно; зріз %.1f = max(медіана номера %.1f, смуга %.1f + нитки від краю паперу %.1f)" % (it["cut"], med, it["strip"], med_rel))
+    # Від'ємний зріз (друк ближче 1,5 мм до краю: межа «друк − 1,5» нижча за нуль; 2316/10 R — `10R-1`)
+    # у page_edge НЕ пишеться (рішення головної 02.10.2026): ns-prep такого знака не розуміє й мовчки
+    # різав бік автоматикою, а в маніфесті лишався знак, якого ніхто не виконував. Тепер знака немає
+    # (бік ріже автоматика Get-NsEdgeCut або слово оператора з ns-edge-keep.csv) і є рядок у журналі.
+    for it in out:
+        if it["cut"] is not None and it["cut"] < 0:
+            it["flags"].append("Review: зріз вийшов від'ємний (%.1f мм) — знак у page_edge не пишеться; бік ріже автоматика або слово оператора" % it["cut"])
+            it["cut_negative"] = it["cut"]
+            it["cut"] = None
     tokens = ["%d%s%s" % (it["n"], it["side"], ("%g" % it["cut"])) for it in out if it["cut"] is not None]
     edge = " ".join(tokens)
     print()
