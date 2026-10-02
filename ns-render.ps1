@@ -38,7 +38,7 @@ param(
     [switch]$CenterV,             # з -PaperPad: центрувати друк і по висоті (за умовчанням поля верх/низ міняються порівну)
     [string]$PadMaskDir = "",     # з -PaperPad: сюди маски доданого паперу pNN_synth.png (мірило шва ns-seamprobe.py)
     [string]$PadGrain = "",       # з -PaperPad: "patch" — зерно латками справжнього паперу (ns-papergrain.py, проба 30.09); порожньо — шум
-    [int]$PadSeam = 0,            # з -PadGrain patch, проба 01.10: 1 — тон доданого біля шва з місцевого паперу; 2 — ще й нерівна межа з розчиненням; 0 — як було
+    [int]$PadSeam = 0,            # з -PadGrain patch: 1 — тон доданого біля шва з місцевого паперу; 2 — ще й нерівна межа з розчиненням; 3 — рампа 5 мм усередині паперу, край аркуша 0,75 мм під рампу (схвалено оператором 02.10.2026); 0 — як було
     [switch]$KeepTmp              # не прибирати тимчасову теку (PNG після балансу, _paperpad_job.json, pNN_pp.png до JPEG) — лише для дослідів
 )
 # Стиснення до медіани номера — стандарт з 21.09.2026 (оператор: «виглядає
@@ -449,13 +449,17 @@ if ($PaperPad) {
             foreach ($tk in ($pj.spine.edge -split '[,\s]+')) { if ($tk) { $measuredTok[$tk.ToUpper()] = $true } }
         }
     }
-    $opSides = @{}
+    # forced_cut (02.10.2026): слово оператора «зрізати N мм» (page_edge > 0) — бік зі слідами зшивання
+    # (2316/10 R: «просто обрізати, рамка рівна»). ns-paperpad там так само нічого не ріже й не заливає,
+    # але з -PadSeam 3 шов «папір | доданий» дістає рампу, як звичайний бік. page_edge 0 — «не чіпати».
+    $opSides = @{}; $opCut = @{}
     if ($manR -and $manR.PSObject.Properties.Name -contains 'page_edge' -and $manR.page_edge) {
         foreach ($tok in ($manR.page_edge -split '[,\s]+')) {
             if ($tok -match '^(\d+)([LRTBlrtb])([\d.]+)$' -and -not $measuredTok.ContainsKey($tok.ToUpper())) {
                 $key = "p{0:D2}" -f [int]$Matches[1]
-                if (-not $opSides.ContainsKey($key)) { $opSides[$key] = @() }
+                if (-not $opSides.ContainsKey($key)) { $opSides[$key] = @(); $opCut[$key] = @() }
                 $opSides[$key] += $Matches[2].ToUpper()
+                if ([double]$Matches[3] -gt 0) { $opCut[$key] += $Matches[2].ToUpper() }
             }
         }
     }
@@ -475,6 +479,7 @@ if ($PaperPad) {
         $ppJob.pages += [ordered]@{ name = $p.Name; png = $p.Path; out = (Join-Path $tmp ($p.Name + "_pp.png"))
                                     crop = @($p.CX, $p.CY, $p.CW, $p.CH)
                                     forced = @(if ($opSides.ContainsKey($p.Name)) { $opSides[$p.Name] } else { @() })
+                                    forced_cut = @(if ($opCut.ContainsKey($p.Name)) { $opCut[$p.Name] } else { @() })
                                     fill = @(if ($fillSides.ContainsKey($p.Name)) { $fillSides[$p.Name] } else { @() }) }
     }
     $jobFile = Join-Path $tmp "_paperpad_job.json"

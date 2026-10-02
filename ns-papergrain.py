@@ -28,6 +28,8 @@ import numpy as np
 P = 48          # латка, пікс. (4 мм при 300 dpi)
 O = 12          # перекриття, пікс.
 STEP = P - O
+POOL_MIN = 200  # латок-джерел на сторінку, менше — сходинки LADDER (02.10.2026)
+LADDER = [(22, 3.0), (22, 2.0), (22, 1.5)]   # (чорнило = темніше за поле на стільки, відступ від чорнила в мм)
 
 
 def _weights():
@@ -63,23 +65,47 @@ def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng, zero_mean=False,
     Lc = canvas.astype(np.float32) @ lw
     Lf = field_c @ lw
     blk = synth if src_block is None else src_block
-    ink = (Lc < Lf - 18) & ~blk
-    dink = cv2.distanceTransform((~ink).astype(np.uint8), cv2.DIST_L2, 3)
-    src = ~blk & (np.abs(Lc - Lf) < 12) & (dink >= 3 * mm)
+
+    def pool(thr, cl):
+        ink = (Lc < Lf - thr) & ~blk
+        dink = cv2.distanceTransform((~ink).astype(np.uint8), cv2.DIST_L2, 3)
+        src = ~blk & (np.abs(Lc - Lf) < 12) & (dink >= cl * mm)
+        I = cv2.integral(src.astype(np.uint8))
+        gy, gx = np.mgrid[0:H - P:8, 0:W - P:8]
+        gy, gx = gy.ravel(), gx.ravel()
+        full = (I[gy + P, gx + P] - I[gy, gx + P] - I[gy + P, gx] + I[gy, gx]) == P * P
+        return gy[full], gx[full]
+    ys, xs = pool(18, 3.0)
+    # Малий пул (02.10.2026, проба стандарту на 6 номерах): «темніше за поле на 18» — стала мірка, а
+    # зерно паперу різне. Розкид зерна G і пул латок (медіана на сторінку): 2329 — 2,87 і 6834;
+    # 2273 — 3,17 і 5002; 2312 — 3,50 і 2249; 2291 — 3,75 і 770; 2305 — 3,90 і 215; 2322 — 4,05 і 87.
+    # На зернистому папері його власні цятки стають «чорнилом», латок немає: 2305/1 — 16, 2322/7 — 9
+    # (менше 20 — доданий заливався ШУМОМ без рампи), ще 4 стор. — 29-38 латок на 800-1170 місць.
+    # Сходинки лише коли латок < POOL_MIN (де їх досить, усе як було — байт у байт): цятки до 22
+    # вважати папером; тоді відступ від чорнила 3 -> 2 -> 1,5 мм (менше — ні: урок 2318).
+    level = 0
+    if len(ys) < POOL_MIN:
+        for lv, (thr, cl) in enumerate(LADDER, 1):
+            y2, x2 = pool(thr, cl)
+            if len(y2) > len(ys):
+                ys, xs, level = y2, x2, lv
+            if len(ys) >= POOL_MIN:
+                break
+    # латок усе одно мало — кожну класти ще й дзеркально (уздовж/упоперек; не на 90°: волокна паперу
+    # мають напрям), щоб повтор тієї самої латки не складався у візерунок
+    flips = len(ys) < POOL_MIN
     dsyn = cv2.distanceTransform((~synth).astype(np.uint8), cv2.DIST_L2, 3) / mm
-    I = cv2.integral(src.astype(np.uint8))
-    ys, xs = np.mgrid[0:H - P:8, 0:W - P:8]
-    ys, xs = ys.ravel(), xs.ravel()
-    full = (I[ys + P, xs + P] - I[ys, xs + P] - I[ys + P, xs] + I[ys, xs]) == P * P
-    ys, xs = ys[full], xs[full]
     n_all = int(len(ys))
     if src_pref is not None and len(ys):
         Ip = cv2.integral(src_pref.astype(np.uint8))
         inp = (Ip[ys + P, xs + P] - Ip[ys, xs + P] - Ip[ys + P, xs] + Ip[ys, xs]) == P * P
         if int(inp.sum()) >= 200:
             ys, xs = ys[inp], xs[inp]
-    if len(ys) < 20:
-        return None, {"patches_src": int(len(ys))}
+    # Було «менше 20 — шум»: шум оператор відхилив 30.09, і мовчазного відступу на нього бути не може
+    # (головна, 02.10.2026). Латки кладуться з будь-якого пулу >= 1 (з дзеркалами); сторінка з малим
+    # пулом іде «на огляд» (ns-paperpad друкує, ns-padreport підсумовує). Шум — лише коли латок 0.
+    if len(ys) < 1:
+        return None, {"patches_src": 0, "pool_level": level}
     cy, cx = ys + P // 2, xs + P // 2
     side = near[cy, cx]
     dedge = np.minimum(np.minimum(cx, W - 1 - cx), np.minimum(cy, H - 1 - cy)) / mm
@@ -118,6 +144,12 @@ def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng, zero_mean=False,
                     break
             used.append((ys[j], xs[j]))
             pr = res[ys[j]:ys[j] + P, xs[j]:xs[j] + P]
+            if flips:
+                fl = int(rng.integers(4))
+                if fl & 1:
+                    pr = pr[::-1]
+                if fl & 2:
+                    pr = pr[:, ::-1]
             if zero_mean:
                 pr = pr - pr.mean(axis=(0, 1))
             acc[ty:ty + P, tx:tx + P] += pr * wgt[..., None]
@@ -127,4 +159,4 @@ def quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng, zero_mean=False,
     # перекриття (і біля краю полотна, де сусідньої латки немає — там це просто одна латка)
     fill = (field_c if dest_field is None else dest_field) + acc / np.sqrt(np.maximum(w2, 1e-6))[..., None]
     return fill, {"patches_src": int(len(ys)), "patches_src_all": n_all, "patches_placed": placed,
-                  "stage": {k: v for k, v in stage.items() if sum(v)}}
+                  "pool_level": level, "flips": bool(flips), "stage": {k: v for k, v in stage.items() if sum(v)}}

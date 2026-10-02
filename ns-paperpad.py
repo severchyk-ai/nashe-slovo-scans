@@ -293,7 +293,7 @@ def grow_irregular(synth, clean, near, skip_sides, mm, rng):
     return synth | grow
 
 
-def ramp_alpha(canvas, synth, base, near, forced, pd, mm, ramp_mm, edge_mm):
+def ramp_alpha(canvas, synth, base, near, forced, pd, mm, ramp_mm, edge_mm, forced_cut=()):
     """Плавний шов (оператор 01.10.2026: «перехід значно-значно плавніший»). Повертає s1 (що замінити
     цілком), al (частка доданого 0..1 для кожного пікселя) і числа для звіту.
       * s1 = доданий + смужка edge_mm справжнього паперу вздовж шва: сам край аркуша (обріз, тінь, світла
@@ -304,7 +304,11 @@ def ramp_alpha(canvas, synth, base, near, forced, pd, mm, ramp_mm, edge_mm):
         (будь-який канал темніший за поле на 22+: і чорний друк, і кольоровий). Перешкода — ЛИШЕ чорнило:
         перша версія брала «нечистий» за clean_paper (гладкість), і рампа виходила 1,0-2,3 мм (мед), у
         70-100 % шва коротша за 3 мм — просвіт звороту й цятки в полях рвали її. Рампа — smoothstep.
-      * боки зі словом оператора (forced) — без смужки й без рампи."""
+      * боки зі словом оператора (forced) — без смужки й без рампи. Виняток (02.10.2026) — forced_cut:
+        бік, де оператор велів ЗРІЗАТИ (page_edge > 0: сліди зшивання на корінці, 2316/10 R — «просто
+        обрізати, рамка рівна»): зріз prep іде по чистому паперу, краю аркуша там уже немає, тож
+        смужка не береться, а рампа — як на звичайному боці (інакше шов «папір | доданий» прямий
+        і різкий). Бік із page_edge 0 («не чіпати») лишається без нічого."""
     H, W = synth.shape
     Lc, Lb = luma(canvas), luma(base)
     d0 = cv2.distanceTransform((~synth).astype(np.uint8), cv2.DIST_L2, 5)
@@ -313,9 +317,9 @@ def ramp_alpha(canvas, synth, base, near, forced, pd, mm, ramp_mm, edge_mm):
     strip = ~synth & (d0 <= edge_mm * mm) & (d_inkd >= 1.5 * mm)
     off = np.zeros((H, W), bool)
     for k, s in enumerate("LRTB"):
-        if s in forced:
+        if s in forced and s not in forced_cut:
             off |= near == k
-        elif pd[s][1] < 3.0:
+        elif pd[s][1] < 3.0 or s in forced:
             strip &= near != k
     strip &= ~off
     s1 = synth | strip
@@ -423,6 +427,7 @@ def main():
         for s in forced:
             pd[s] = (pd[s][0], min(pd[s][1], 1.5))
         pages.append(dict(name=p["name"], out=p["out"], img=img, synth0=synth0, P=P, forced=sorted(forced),
+                          forced_cut=sorted(set(p.get("forced_cut", [])) & forced),
                           dirt=drep, pd=pd, w=W0, h=H0, land=W0 > H0,
                           wedge_px=int(wedge.sum()), dirt_px=int((synth0 & ~wedge).sum())))
     report = {"dpi": dpi, "frame_px": fm, "center_v": center_v, "pages": []}
@@ -468,8 +473,9 @@ def main():
             canvas[dy0:dy0 + sy1 - sy0, dx0:dx0 + sx1 - sx0] = q["img"][sy0:sy1, sx0:sx1]
             known[dy0:dy0 + sy1 - sy0, dx0:dx0 + sx1 - sx0] = ~q["synth0"][sy0:sy1, sx0:sx1]
             synth = ~known
+            seam0 = synth                    # шов до рампи й розчинення — для мірила (ns-padreport.py)
             rec = {"page": q["name"], "land": land, "target": [tw, th], "size": [w, h],
-                   "dirt": q["dirt"], "forced": q["forced"], "wedge_px": q["wedge_px"], "dirt_px": q["dirt_px"],
+                   "dirt": q["dirt"], "forced": q["forced"], "forced_cut": q["forced_cut"], "wedge_px": q["wedge_px"], "dirt_px": q["dirt_px"],
                    "print_block_mm": {s: round(pd[s][0], 1) for s in "LRTB"},
                    "print_near_mm": {s: round(pd[s][1], 1) for s in "LRTB"},
                    "clamped": [ax_c != ax, ay_c != ay]}
@@ -528,7 +534,8 @@ def main():
                         qf, qinfo = pg.quilt_fill(canvas, synth, paper_ok, field_c, near, mm, rng)
                     elif seam_mode >= 3:
                         s1, al, rinfo = ramp_alpha(canvas, synth, field_c, near, q["forced"], q["pd"], mm,
-                                                   float(job.get("ramp_mm", 5.0)), float(job.get("edge_mm", 0.75)))
+                                                   float(job.get("ramp_mm", 5.0)), float(job.get("edge_mm", 0.75)),
+                                                   forced_cut=q["forced_cut"])
                         zone = al > 0.01
                         dest = field_c + seam_tone(canvas, s1, paper_ok, field_c, mm)
                         # джерело латок — поля сторінки (поза блоком друку з запасом 1 мм)
@@ -595,6 +602,15 @@ def main():
                     rec["grain_patch"] = qinfo
                     if qf is not None:
                         fill = np.clip(qf, 0, 255).astype(np.uint8)
+                        if qinfo.get("patches_src", 0) < pg.POOL_MIN:
+                            rec["review"] = "латок %d на %d місць" % (qinfo["patches_src"], qinfo.get("patches_placed", 0))
+                            print("НА ОГЛЯД %s: %s (сходинка %d, з дзеркалами)" % (q["name"], rec["review"], qinfo.get("pool_level", 0)))
+                    else:
+                        # 02.10.2026: 2305/1 і 2322/7 мовчки лишилися з шумом і прямим швом — тепер голосно;
+                        # сюди доходить лише сторінка, де латок справжнього паперу 0
+                        rec["grain_fallback"] = "noise"
+                        rec["review"] = "латок 0 — доданий залито ШУМОМ, рампи немає"
+                        print("НА ОГЛЯД %s: %s" % (q["name"], rec["review"]))
                 # перенесений друк: у доданому пікселі на 30+ темніші за тон поля (має бути ~0)
                 if wmask is None:
                     wmask = synth
@@ -612,6 +628,9 @@ def main():
             if job.get("mask_dir"):
                 mk = cv2.copyMakeBorder((synth * 255).astype(np.uint8), fm, fm, fm, fm, cv2.BORDER_CONSTANT, value=0)
                 Image.fromarray(mk).save("%s/%s_synth.png" % (job["mask_dir"], q["name"]))
+                # маска шва ДО рампи (seam 3 зсуває synth на середину рампи): мірило рахує відстань від неї
+                mk0 = cv2.copyMakeBorder((seam0 * 255).astype(np.uint8), fm, fm, fm, fm, cv2.BORDER_CONSTANT, value=0)
+                Image.fromarray(mk0).save("%s/%s_seam0.png" % (job["mask_dir"], q["name"]))
             report["pages"].append(rec)
             m, dr = rec["margin_block_mm"], rec["dirt"]
             sm = " ".join("%s %+.1f/%.1f x%.2f" % (s, v["dL"], v["dL_max"], v["sd_ratio"])
